@@ -1,3 +1,6 @@
 [submodule "Aerial-Base"]
 	path = Aerial-Base
 	url = https://github.com/AerialScreensaver/Aerial.git
+[submodule "Plasma-Video-Base"]
+	path = Plasma-Video-Base
+	url = https://github.com/luisbocanegra/plasma-smart-video-wallpaper-reborn.git
