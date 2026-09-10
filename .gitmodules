@@ -1,0 +1,3 @@
+[submodule "Aerial-Base"]
+	path = Aerial-Base
+	url = https://github.com/AerialScreensaver/Aerial.git
