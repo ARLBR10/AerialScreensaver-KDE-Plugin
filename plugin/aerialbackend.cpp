@@ -2,14 +2,20 @@
 
 #include "manifestparser.h"
 
+#include <KArchiveDirectory>
+#include <KArchiveFile>
+#include <KTar>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QJsonDocument>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QStandardPaths>
+#include <QTemporaryFile>
 #include <QTimer>
+#include <QtConcurrentRun>
 #ifdef AERIAL_ALLOW_INSECURE_TLS
 #include <QSslError>
 #endif
@@ -18,10 +24,27 @@
 
 namespace
 {
-const QUrl catalogUrl(QStringLiteral("https://sylvan.apple.com/Aerials/2x/entries.json"));
+const QUrl catalogUrl(QStringLiteral("https://sylvan.apple.com/itunes-assets/Aerials126/v4/c0/45/d9/c045d9d0-9606-1535-62fe-189edb4f79eb/resources-atv-23J-2.tar"));
 constexpr qint64 minimumVideoBytes = 64 * 1024;
-constexpr qint64 maximumCatalogBytes = 32 * 1024 * 1024;
+constexpr qint64 maximumCatalogArchiveBytes = 32 * 1024 * 1024;
 constexpr qint64 maximumVideoBytes = 2LL * 1024 * 1024 * 1024;
+
+QByteArray manifestFromArchive(const QByteArray &data)
+{
+    QTemporaryFile temporary;
+    if (!temporary.open() || temporary.write(data) != data.size() || !temporary.flush()) {
+        return {};
+    }
+    KTar archive(temporary.fileName());
+    if (!archive.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const KArchiveEntry *entry = archive.directory()->entry(QStringLiteral("entries.json"));
+    if (!entry || !entry->isFile()) {
+        return {};
+    }
+    return static_cast<const KArchiveFile *>(entry)->data();
+}
 }
 
 AerialBackend::AerialBackend(QObject *parent)
@@ -53,7 +76,7 @@ QString AerialBackend::videoDirectory() const
     return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + QStringLiteral("/org.kde.plasma.aerial/videos");
 }
 
-QString AerialBackend::catalogPath() const { return dataDirectory() + QStringLiteral("/catalog.json"); }
+QString AerialBackend::catalogPath() const { return dataDirectory() + QStringLiteral("/catalog-v2.json"); }
 
 QString AerialBackend::cachePath(const AerialAsset &asset, const AerialVariant &variant) const
 {
@@ -92,7 +115,7 @@ bool AerialBackend::activateCatalog(const QByteArray &data, bool persist)
 
 void AerialBackend::refreshCatalog()
 {
-    if (m_reply) {
+    if (m_reply || m_catalogProcessing) {
         return;
     }
     m_catalogBuffer.clear();
@@ -196,7 +219,7 @@ void AerialBackend::startRequest(const QUrl &url, RequestKind kind)
         const QByteArray chunk = m_reply->readAll();
         if (m_requestKind == RequestKind::Catalog) {
             m_catalogBuffer.append(chunk);
-            if (m_catalogBuffer.size() > maximumCatalogBytes) {
+            if (m_catalogBuffer.size() > maximumCatalogArchiveBytes) {
                 m_reply->abort();
             }
         } else if (m_downloadFile) {
@@ -232,12 +255,24 @@ void AerialBackend::requestFinished()
     reply->deleteLater();
 
     if (kind == RequestKind::Catalog) {
-        if (activateCatalog(m_catalogBuffer, true)) {
-            setError({});
-            setState(QStringLiteral("ready"));
-        } else {
-            setState(m_catalog.rowCount() > 0 ? QStringLiteral("ready") : QStringLiteral("error"));
-        }
+        m_catalogProcessing = true;
+        setState(QStringLiteral("processing"));
+        auto *watcher = new QFutureWatcher<QByteArray>(this);
+        connect(watcher, &QFutureWatcher<QByteArray>::finished, this, [this, watcher] {
+            const QByteArray manifest = watcher->result();
+            watcher->deleteLater();
+            m_catalogProcessing = false;
+            if (!manifest.isEmpty() && activateCatalog(manifest, true)) {
+                setError({});
+                setState(QStringLiteral("ready"));
+            } else {
+                if (manifest.isEmpty()) {
+                    setError(QStringLiteral("The Apple catalog archive has no usable entries.json"));
+                }
+                setState(m_catalog.rowCount() > 0 ? QStringLiteral("ready") : QStringLiteral("error"));
+            }
+        });
+        watcher->setFuture(QtConcurrent::run(manifestFromArchive, std::move(m_catalogBuffer)));
         m_catalogBuffer.clear();
         return;
     }

@@ -82,4 +82,5 @@ private:
     qint64 m_received = 0;
     qint64 m_total = 0;
     qint64 m_cacheLimitBytes = 4LL * 1024 * 1024 * 1024;
+    bool m_catalogProcessing = false;
 };

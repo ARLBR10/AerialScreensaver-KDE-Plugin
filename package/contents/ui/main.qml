@@ -62,7 +62,8 @@ WallpaperItem {
                 anchors.horizontalCenter: parent.horizontalCenter
                 color: "white"
                 font.pixelSize: 22
-                text: AerialBackend.state === "downloading" ? "Preparing an Aerial video" : "Aerial"
+                text: AerialBackend.state === "downloading" ? "Preparing an Aerial video"
+                    : AerialBackend.state === "processing" ? "Reading the Aerial catalog" : "Aerial"
             }
             Text {
                 width: parent.width

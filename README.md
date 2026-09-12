@@ -12,13 +12,18 @@ download has completed.
 ## Build
 
 Required development dependencies are CMake, Extra CMake Modules, Plasma 6,
-Qt 6 Core, Network, QML, Multimedia runtime support, and Qt Test.
+KF6 Archive, Qt 6 Core, Concurrent, Network, QML, Multimedia runtime support,
+and Qt Test.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
 ```
+
+When installed, `sccache` is detected and enabled automatically. Disable it
+with `-DAERIAL_USE_SCCACHE=OFF`, or provide another launcher through
+`-DCMAKE_CXX_COMPILER_LAUNCHER=...`.
 
 Install into the active system prefix:
 

@@ -11,7 +11,7 @@ set(aerial_backend_sources
 
 add_library(aerialbackend_static STATIC ${aerial_backend_sources})
 set_property(TARGET aerialbackend_static PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(aerialbackend_static PUBLIC Qt6::Core Qt6::Network Qt6::Qml)
+target_link_libraries(aerialbackend_static PUBLIC Qt6::Concurrent Qt6::Core Qt6::Network Qt6::Qml KF6::Archive)
 target_include_directories(aerialbackend_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(AERIAL_ALLOW_INSECURE_TLS)
     target_compile_definitions(aerialbackend_static PRIVATE AERIAL_ALLOW_INSECURE_TLS)
