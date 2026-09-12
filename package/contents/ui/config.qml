@@ -91,18 +91,25 @@ ColumnLayout {
         id: catalogGrid
         Layout.fillWidth: true
         Layout.fillHeight: true
+        Layout.minimumHeight: 240
         clip: true
         model: AerialBackend.catalogModel
         reuseItems: true
-        cellWidth: width / Math.max(1, Math.floor(width / 220))
+        boundsBehavior: Flickable.StopAtBounds
+        cellWidth: Math.floor(width / Math.max(1, Math.floor(width / 220)))
         cellHeight: 178
+        ScrollBar.vertical: ScrollBar {
+            policy: ScrollBar.AsNeeded
+        }
 
         delegate: Item {
             required property string assetId
             required property string name
             required property url previewUrl
+            required property bool previewAvailable
             required property string sourceLabel
             readonly property bool selected: root.cfg_SelectedAssetIds.indexOf(assetId) !== -1
+            property bool previewTimedOut: false
             width: catalogGrid.cellWidth
             height: catalogGrid.cellHeight
 
@@ -128,12 +135,17 @@ ColumnLayout {
                     clip: true
                 }
 
-                Kirigami.Icon {
+                BusyIndicator {
                     anchors.centerIn: preview
-                    width: 40
-                    height: 40
-                    source: "image-missing"
-                    visible: preview.status === Image.Error || previewUrl.toString() === ""
+                    running: previewAvailable && previewUrl.toString() === "" && !previewTimedOut
+                    visible: running
+                }
+
+                Label {
+                    anchors.centerIn: preview
+                    text: "Preview unavailable"
+                    color: Kirigami.Theme.disabledTextColor
+                    visible: !previewAvailable || preview.status === Image.Error || previewTimedOut
                 }
 
                 Rectangle {
@@ -166,10 +178,9 @@ ColumnLayout {
                     elide: Text.ElideRight
                 }
 
-                MouseArea {
-                    anchors.fill: parent
+                TapHandler {
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: {
+                    onTapped: {
                         const values = root.cfg_SelectedAssetIds.slice()
                         const index = values.indexOf(assetId)
                         if (index === -1) values.push(assetId)
@@ -178,6 +189,20 @@ ColumnLayout {
                     }
                 }
             }
+
+            Timer {
+                interval: 16000
+                running: previewAvailable && previewUrl.toString() === ""
+                onTriggered: previewTimedOut = true
+            }
+
+            function loadPreview() {
+                previewTimedOut = false
+                AerialBackend.requestPreview(assetId)
+            }
+
+            Component.onCompleted: loadPreview()
+            onAssetIdChanged: loadPreview()
         }
     }
 

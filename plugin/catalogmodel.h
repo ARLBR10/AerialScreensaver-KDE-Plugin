@@ -18,6 +18,7 @@ struct AerialAsset {
     QString shotId;
     QStringList sourceLabels;
     QUrl previewUrl;
+    QUrl localPreviewUrl;
     QVector<AerialVariant> variants;
 };
 
@@ -30,6 +31,7 @@ public:
         AssetIdRole = Qt::UserRole + 1,
         NameRole,
         PreviewUrlRole,
+        PreviewAvailableRole,
         SourceLabelRole,
         CachedRole,
     };
@@ -43,6 +45,7 @@ public:
     void setAssets(QVector<AerialAsset> assets);
     const QVector<AerialAsset> &assets() const;
     const AerialAsset *find(const QString &id) const;
+    void setPreviewUrl(const QString &id, const QUrl &localUrl);
     void notifyCacheChanged(const QString &id);
 
 private:

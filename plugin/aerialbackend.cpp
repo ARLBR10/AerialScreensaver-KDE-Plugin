@@ -33,6 +33,7 @@ const QString macosSourceId(QStringLiteral("macos-26"));
 constexpr qint64 minimumVideoBytes = 64 * 1024;
 constexpr qint64 maximumDiscoveryBytes = 64 * 1024;
 constexpr qint64 maximumCatalogArchiveBytes = 32 * 1024 * 1024;
+constexpr qint64 maximumPreviewBytes = 8 * 1024 * 1024;
 constexpr qint64 maximumVideoBytes = 2LL * 1024 * 1024 * 1024;
 
 QByteArray manifestFromArchive(const QByteArray &data)
@@ -132,6 +133,11 @@ QString AerialBackend::videoDirectory() const
     return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + QStringLiteral("/org.kde.plasma.aerial/videos");
 }
 
+QString AerialBackend::previewDirectory() const
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + QStringLiteral("/org.kde.plasma.aerial/previews");
+}
+
 QString AerialBackend::catalogPath() const { return dataDirectory() + QStringLiteral("/catalog-v2.json"); }
 
 QString AerialBackend::sourceCatalogPath(const QString &sourceId) const
@@ -143,6 +149,12 @@ QString AerialBackend::cachePath(const AerialAsset &asset, const AerialVariant &
 {
     const auto digest = QCryptographicHash::hash((asset.id + QLatin1Char('|') + variant.key + QLatin1Char('|') + variant.url.toString()).toUtf8(), QCryptographicHash::Sha256).toHex();
     return videoDirectory() + QLatin1Char('/') + QString::fromLatin1(digest) + QStringLiteral(".mov");
+}
+
+QString AerialBackend::previewPath(const AerialAsset &asset) const
+{
+    const auto digest = QCryptographicHash::hash((asset.id + QLatin1Char('|') + asset.previewUrl.toString()).toUtf8(), QCryptographicHash::Sha256).toHex();
+    return previewDirectory() + QLatin1Char('/') + QString::fromLatin1(digest) + QStringLiteral(".image");
 }
 
 void AerialBackend::loadCatalog()
@@ -175,6 +187,12 @@ bool AerialBackend::activateCatalog(const QByteArray &data, bool persist)
     if (assets.isEmpty()) {
         setError(error);
         return false;
+    }
+    for (auto &asset : assets) {
+        const QFileInfo preview(previewPath(asset));
+        if (!asset.previewUrl.isEmpty() && preview.isFile() && preview.size() > 0) {
+            asset.localPreviewUrl = QUrl::fromLocalFile(preview.absoluteFilePath());
+        }
     }
     if (persist) {
         QDir().mkpath(dataDirectory());
@@ -223,6 +241,87 @@ QStringList AerialBackend::assetIds() const
         ids.append(asset.id);
     }
     return ids;
+}
+
+void AerialBackend::requestPreview(const QString &assetId)
+{
+    const auto *asset = m_catalog.find(assetId);
+    if (!asset || asset->previewUrl.isEmpty() || !isAllowedUrl(asset->previewUrl)) {
+        return;
+    }
+    const QFileInfo cached(previewPath(*asset));
+    if (cached.isFile() && cached.size() > 0) {
+        m_catalog.setPreviewUrl(assetId, QUrl::fromLocalFile(cached.absoluteFilePath()));
+        return;
+    }
+    if (m_previewAssetId == assetId || m_pendingPreviews.contains(assetId)) {
+        return;
+    }
+    m_pendingPreviews.push_back(assetId);
+    startNextPreview();
+}
+
+void AerialBackend::startNextPreview()
+{
+    if (m_previewReply) {
+        return;
+    }
+    while (!m_pendingPreviews.isEmpty()) {
+        m_previewAssetId = m_pendingPreviews.takeFirst();
+        const auto *asset = m_catalog.find(m_previewAssetId);
+        if (!asset || asset->previewUrl.isEmpty() || !isAllowedUrl(asset->previewUrl)) {
+            m_previewAssetId.clear();
+            continue;
+        }
+
+        m_previewBuffer.clear();
+        QNetworkRequest request(asset->previewUrl);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("PlasmaAerial/0.1"));
+        request.setTransferTimeout(15'000);
+        m_previewReply = m_network.get(request);
+#ifdef AERIAL_ALLOW_INSECURE_TLS
+        connect(m_previewReply, &QNetworkReply::sslErrors, this, [reply = QPointer<QNetworkReply>(m_previewReply)](const QList<QSslError> &) {
+            if (reply) {
+                reply->ignoreSslErrors();
+            }
+        });
+#endif
+        connect(m_previewReply, &QNetworkReply::redirected, this, [this](const QUrl &redirect) {
+            if (m_previewReply && !isAllowedUrl(redirect)) {
+                m_previewReply->abort();
+            }
+        });
+        connect(m_previewReply, &QIODevice::readyRead, this, [this] {
+            if (!m_previewReply) {
+                return;
+            }
+            m_previewBuffer.append(m_previewReply->readAll());
+            if (m_previewBuffer.size() > maximumPreviewBytes) {
+                m_previewReply->abort();
+            }
+        });
+        connect(m_previewReply, &QNetworkReply::finished, this, [this] {
+            const auto reply = m_previewReply;
+            m_previewReply = nullptr;
+            const auto *asset = m_catalog.find(m_previewAssetId);
+            if (reply && asset && reply->error() == QNetworkReply::NoError && isAllowedUrl(reply->url()) && !m_previewBuffer.isEmpty()) {
+                QDir().mkpath(previewDirectory());
+                const QString path = previewPath(*asset);
+                QSaveFile file(path);
+                if (file.open(QIODevice::WriteOnly) && file.write(m_previewBuffer) == m_previewBuffer.size() && file.commit()) {
+                    m_catalog.setPreviewUrl(m_previewAssetId, QUrl::fromLocalFile(path));
+                }
+            }
+            if (reply) {
+                reply->deleteLater();
+            }
+            m_previewBuffer.clear();
+            m_previewAssetId.clear();
+            startNextPreview();
+        });
+        return;
+    }
 }
 
 void AerialBackend::ensureDownloaded(const QString &assetId, const QString &qualityPolicy, int cacheLimitMiB)

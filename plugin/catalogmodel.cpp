@@ -22,7 +22,9 @@ QVariant CatalogModel::data(const QModelIndex &index, int role) const
     case NameRole:
         return asset.name;
     case PreviewUrlRole:
-        return asset.previewUrl;
+        return asset.localPreviewUrl;
+    case PreviewAvailableRole:
+        return !asset.previewUrl.isEmpty();
     case SourceLabelRole:
         if (asset.sourceLabels.contains(QStringLiteral("macOS 26")) && asset.sourceLabels.contains(QStringLiteral("tvOS 26"))) {
             return QStringLiteral("macOS and tvOS 26");
@@ -37,7 +39,7 @@ QVariant CatalogModel::data(const QModelIndex &index, int role) const
 
 QHash<int, QByteArray> CatalogModel::roleNames() const
 {
-    return {{AssetIdRole, "assetId"}, {NameRole, "name"}, {PreviewUrlRole, "previewUrl"}, {SourceLabelRole, "sourceLabel"}, {CachedRole, "cached"}};
+    return {{AssetIdRole, "assetId"}, {NameRole, "name"}, {PreviewUrlRole, "previewUrl"}, {PreviewAvailableRole, "previewAvailable"}, {SourceLabelRole, "sourceLabel"}, {CachedRole, "cached"}};
 }
 
 void CatalogModel::setAssets(QVector<AerialAsset> assets)
@@ -60,6 +62,18 @@ const AerialAsset *CatalogModel::find(const QString &id) const
         }
     }
     return nullptr;
+}
+
+void CatalogModel::setPreviewUrl(const QString &id, const QUrl &localUrl)
+{
+    for (int row = 0; row < m_assets.size(); ++row) {
+        if (m_assets.at(row).id == id && m_assets.at(row).localPreviewUrl != localUrl) {
+            m_assets[row].localPreviewUrl = localUrl;
+            const auto modelIndex = index(row);
+            Q_EMIT dataChanged(modelIndex, modelIndex, {PreviewUrlRole});
+            return;
+        }
+    }
 }
 
 void CatalogModel::notifyCacheChanged(const QString &id)

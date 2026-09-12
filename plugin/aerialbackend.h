@@ -29,6 +29,7 @@ public:
 
     Q_INVOKABLE void refreshCatalog();
     Q_INVOKABLE QStringList assetIds() const;
+    Q_INVOKABLE void requestPreview(const QString &assetId);
     Q_INVOKABLE void ensureDownloaded(const QString &assetId, const QString &qualityPolicy, int cacheLimitMiB);
     Q_INVOKABLE void cancelDownload();
     Q_INVOKABLE void markPlaying(const QUrl &localUrl, bool playing);
@@ -55,9 +56,11 @@ private:
     static bool isAllowedUrl(const QUrl &url);
     QString dataDirectory() const;
     QString videoDirectory() const;
+    QString previewDirectory() const;
     QString catalogPath() const;
     QString sourceCatalogPath(const QString &sourceId) const;
     QString cachePath(const AerialAsset &asset, const AerialVariant &variant) const;
+    QString previewPath(const AerialAsset &asset) const;
     void loadCatalog();
     bool activateCatalog(const QByteArray &data, bool persist);
     void catalogArchiveFinished();
@@ -71,14 +74,17 @@ private:
     void setError(const QString &error);
     void enforceCacheLimit(qint64 limitBytes);
     void startNextPendingDownload();
+    void startNextPreview();
 
     CatalogModel m_catalog;
     QNetworkAccessManager m_network;
     QPointer<QNetworkReply> m_reply;
+    QPointer<QNetworkReply> m_previewReply;
     std::unique_ptr<QSaveFile> m_downloadFile;
     RequestKind m_requestKind = RequestKind::None;
     RefreshStage m_refreshStage = RefreshStage::None;
     QByteArray m_catalogBuffer;
+    QByteArray m_previewBuffer;
     QHash<QString, QByteArray> m_sourceManifests;
     QStringList m_catalogErrors;
     QString m_state = QStringLiteral("idle");
@@ -86,8 +92,10 @@ private:
     QString m_assetId;
     QString m_assetName;
     QString m_downloadPath;
+    QString m_previewAssetId;
     QHash<QString, int> m_playingPaths;
     QVector<PendingDownload> m_pendingDownloads;
+    QStringList m_pendingPreviews;
     qint64 m_received = 0;
     qint64 m_total = 0;
     qint64 m_cacheLimitBytes = 4LL * 1024 * 1024 * 1024;
