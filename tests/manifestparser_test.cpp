@@ -43,8 +43,8 @@ void ManifestParserTest::parsesMacosDiscovery()
 void ManifestParserTest::mergesDuplicateAssetVariants()
 {
     const QByteArray json = QByteArrayLiteral(R"({"assets":[
-        {"id":"shared","url-1080-H264":"https://sylvan.apple.com/shared-1080.mov"},
-        {"id":"shared","accessibilityLabel":"macOS landscape","previewImage":"https://sylvan.apple.com/shared.jpg","url-4K-SDR-240FPS":"https://sylvan.apple.com/shared-4k.mov"},
+        {"id":"shared","_aerialSourceLabel":"tvOS 26","url-1080-H264":"https://sylvan.apple.com/shared-1080.mov"},
+        {"id":"shared","_aerialSourceLabel":"macOS 26","accessibilityLabel":"macOS landscape","previewImage":"https://sylvan.apple.com/shared.jpg","url-4K-SDR-240FPS":"https://sylvan.apple.com/shared-4k.mov"},
         {"id":"mac-only","localizedNameKey":"unused","accessibilityLabel":"Tahoe","url-4K-SDR-240FPS":"https://sylvan.apple.com/tahoe.mov"}
     ]})");
     QString error;
@@ -53,6 +53,7 @@ void ManifestParserTest::mergesDuplicateAssetVariants()
     QCOMPARE(assets.size(), 2);
     QCOMPARE(assets.at(0).name, QStringLiteral("macOS landscape"));
     QCOMPARE(assets.at(0).variants.size(), 2);
+    QCOMPARE(assets.at(0).sourceLabels, QStringList({QStringLiteral("tvOS 26"), QStringLiteral("macOS 26")}));
     QCOMPARE(assets.at(0).previewUrl, QUrl(QStringLiteral("https://sylvan.apple.com/shared.jpg")));
     QCOMPARE(assets.at(1).name, QStringLiteral("Tahoe"));
 }

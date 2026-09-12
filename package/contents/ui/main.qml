@@ -12,6 +12,9 @@ WallpaperItem {
     property int consecutiveFailures: 0
     property url activeUrl: ""
     property string activeName: ""
+    property string preparedAssetId: ""
+    property string preparedName: ""
+    property url preparedUrl: ""
 
     function rebuildQueue() {
         const available = AerialBackend.assetIds()
@@ -28,6 +31,28 @@ WallpaperItem {
             }
         }
         queueIndex = -1
+        preparedAssetId = ""
+        preparedName = ""
+        preparedUrl = ""
+    }
+
+    function activate(assetId, name, localUrl) {
+        AerialBackend.markPlaying(activeUrl, false)
+        activeUrl = localUrl
+        activeName = name
+        consecutiveFailures = 0
+        player.source = localUrl
+        AerialBackend.markPlaying(localUrl, true)
+        player.play()
+        prefetchTimer.restart()
+    }
+
+    function prefetchNext() {
+        if (queue.length < 2 || queueIndex < 0) return
+        const nextIndex = (queueIndex + 1) % queue.length
+        if (queue[nextIndex] !== preparedAssetId) {
+            AerialBackend.ensureDownloaded(queue[nextIndex], configuration.QualityPolicy, configuration.CacheLimitMiB)
+        }
     }
 
     function next() {
@@ -38,6 +63,16 @@ WallpaperItem {
             return
         }
         queueIndex = (queueIndex + 1) % queue.length
+        if (preparedAssetId === queue[queueIndex] && preparedUrl.toString() !== "") {
+            const assetId = preparedAssetId
+            const name = preparedName
+            const localUrl = preparedUrl
+            preparedAssetId = ""
+            preparedName = ""
+            preparedUrl = ""
+            activate(assetId, name, localUrl)
+            return
+        }
         AerialBackend.ensureDownloaded(queue[queueIndex], configuration.QualityPolicy, configuration.CacheLimitMiB)
     }
 
@@ -49,7 +84,7 @@ WallpaperItem {
             id: output
             anchors.fill: parent
             fillMode: configuration.FillMode === 0 ? VideoOutput.PreserveAspectFit : VideoOutput.PreserveAspectCrop
-            visible: player.mediaStatus >= MediaPlayer.LoadedMedia && player.error === MediaPlayer.NoError
+            visible: root.activeUrl.toString() !== "" && player.error === MediaPlayer.NoError
         }
 
         Column {
@@ -106,6 +141,7 @@ WallpaperItem {
         onErrorOccurred: function(error, errorString) {
             console.warn("Aerial playback error:", errorString)
             AerialBackend.markPlaying(root.activeUrl, false)
+            root.activeUrl = ""
             root.consecutiveFailures++
             source = ""
             retryTimer.restart()
@@ -119,6 +155,13 @@ WallpaperItem {
         onTriggered: root.next()
     }
 
+    Timer {
+        id: prefetchTimer
+        interval: 1000
+        repeat: false
+        onTriggered: root.prefetchNext()
+    }
+
     Connections {
         target: AerialBackend
 
@@ -129,16 +172,19 @@ WallpaperItem {
             }
         }
         function onPlayableReady(assetId, name, localUrl) {
-            if (root.queue.length === 0 || root.queue[root.queueIndex] !== assetId) {
+            if (root.queue.length === 0) {
                 return
             }
-            AerialBackend.markPlaying(root.activeUrl, false)
-            root.activeUrl = localUrl
-            root.activeName = name
-            root.consecutiveFailures = 0
-            player.source = localUrl
-            AerialBackend.markPlaying(localUrl, true)
-            player.play()
+            if (root.queue[root.queueIndex] === assetId) {
+                root.activate(assetId, name, localUrl)
+                return
+            }
+            const nextIndex = (root.queueIndex + 1) % root.queue.length
+            if (root.queue[nextIndex] === assetId) {
+                root.preparedAssetId = assetId
+                root.preparedName = name
+                root.preparedUrl = localUrl
+            }
         }
         function onOperationFailed(assetId, message) {
             if (root.queue.length > 0 && root.queue[root.queueIndex] === assetId) {

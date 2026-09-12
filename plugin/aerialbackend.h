@@ -56,6 +56,7 @@ private:
     QString dataDirectory() const;
     QString videoDirectory() const;
     QString catalogPath() const;
+    QString sourceCatalogPath(const QString &sourceId) const;
     QString cachePath(const AerialAsset &asset, const AerialVariant &variant) const;
     void loadCatalog();
     bool activateCatalog(const QByteArray &data, bool persist);
@@ -78,7 +79,7 @@ private:
     RequestKind m_requestKind = RequestKind::None;
     RefreshStage m_refreshStage = RefreshStage::None;
     QByteArray m_catalogBuffer;
-    QVector<QByteArray> m_sourceManifests;
+    QHash<QString, QByteArray> m_sourceManifests;
     QStringList m_catalogErrors;
     QString m_state = QStringLiteral("idle");
     QString m_error;

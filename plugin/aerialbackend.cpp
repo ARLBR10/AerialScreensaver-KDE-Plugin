@@ -28,6 +28,8 @@ namespace
 {
 const QUrl tvosCatalogUrl(QStringLiteral("https://sylvan.apple.com/itunes-assets/Aerials126/v4/c0/45/d9/c045d9d0-9606-1535-62fe-189edb4f79eb/resources-atv-23J-2.tar"));
 const QUrl macosDiscoveryUrl(QStringLiteral("https://configuration.apple.com/configurations/internetservices/aerials/resources-config-26-0.plist"));
+const QString tvosSourceId(QStringLiteral("tvos-26"));
+const QString macosSourceId(QStringLiteral("macos-26"));
 constexpr qint64 minimumVideoBytes = 64 * 1024;
 constexpr qint64 maximumDiscoveryBytes = 64 * 1024;
 constexpr qint64 maximumCatalogArchiveBytes = 32 * 1024 * 1024;
@@ -50,13 +52,20 @@ QByteArray manifestFromArchive(const QByteArray &data)
     return static_cast<const KArchiveFile *>(entry)->data();
 }
 
-QByteArray combineManifests(const QVector<QByteArray> &manifests)
+QByteArray combineManifests(const QHash<QString, QByteArray> &manifests)
 {
     QJsonArray assets;
-    for (const auto &manifest : manifests) {
+    const std::pair<QString, QString> sources[] = {
+        {tvosSourceId, QStringLiteral("tvOS 26")},
+        {macosSourceId, QStringLiteral("macOS 26")},
+    };
+    for (const auto &[sourceId, sourceLabel] : sources) {
+        const auto manifest = manifests.value(sourceId);
         const auto document = QJsonDocument::fromJson(manifest);
         const auto sourceAssets = document.object().value(QStringLiteral("assets")).toArray();
-        for (const auto &asset : sourceAssets) {
+        for (const auto &value : sourceAssets) {
+            auto asset = value.toObject();
+            asset.insert(QStringLiteral("_aerialSourceLabel"), sourceLabel);
             assets.append(asset);
         }
     }
@@ -64,6 +73,32 @@ QByteArray combineManifests(const QVector<QByteArray> &manifests)
     combined.insert(QStringLiteral("version"), 1);
     combined.insert(QStringLiteral("assets"), assets);
     return QJsonDocument(combined).toJson(QJsonDocument::Compact);
+}
+
+QHash<QString, QByteArray> splitLegacyManifest(const QByteArray &manifest)
+{
+    QJsonArray tvosAssets;
+    QJsonArray macosAssets;
+    const auto assets = QJsonDocument::fromJson(manifest).object().value(QStringLiteral("assets")).toArray();
+    for (const auto &value : assets) {
+        const auto asset = value.toObject();
+        const bool hasStandardVariant = asset.contains(QStringLiteral("url-1080-H264"))
+            || asset.contains(QStringLiteral("url-1080-SDR"))
+            || asset.contains(QStringLiteral("url-4K-SDR"))
+            || asset.contains(QStringLiteral("url-1080-HDR"))
+            || asset.contains(QStringLiteral("url-4K-HDR"));
+        (hasStandardVariant ? tvosAssets : macosAssets).append(asset);
+    }
+
+    QHash<QString, QByteArray> result;
+    const auto addSource = [&result](const QString &sourceId, const QJsonArray &sourceAssets) {
+        if (!sourceAssets.isEmpty()) {
+            result.insert(sourceId, QJsonDocument(QJsonObject{{QStringLiteral("assets"), sourceAssets}}).toJson(QJsonDocument::Compact));
+        }
+    };
+    addSource(tvosSourceId, tvosAssets);
+    addSource(macosSourceId, macosAssets);
+    return result;
 }
 }
 
@@ -99,6 +134,11 @@ QString AerialBackend::videoDirectory() const
 
 QString AerialBackend::catalogPath() const { return dataDirectory() + QStringLiteral("/catalog-v2.json"); }
 
+QString AerialBackend::sourceCatalogPath(const QString &sourceId) const
+{
+    return dataDirectory() + QStringLiteral("/catalog-") + sourceId + QStringLiteral(".json");
+}
+
 QString AerialBackend::cachePath(const AerialAsset &asset, const AerialVariant &variant) const
 {
     const auto digest = QCryptographicHash::hash((asset.id + QLatin1Char('|') + variant.key + QLatin1Char('|') + variant.url.toString()).toUtf8(), QCryptographicHash::Sha256).toHex();
@@ -107,8 +147,23 @@ QString AerialBackend::cachePath(const AerialAsset &asset, const AerialVariant &
 
 void AerialBackend::loadCatalog()
 {
+    for (const auto &sourceId : {tvosSourceId, macosSourceId}) {
+        QFile sourceFile(sourceCatalogPath(sourceId));
+        if (sourceFile.open(QIODevice::ReadOnly)) {
+            m_sourceManifests.insert(sourceId, sourceFile.readAll());
+        }
+    }
+    if (!m_sourceManifests.isEmpty() && activateCatalog(combineManifests(m_sourceManifests), false)) {
+        setState(QStringLiteral("ready"));
+        return;
+    }
     QFile file(catalogPath());
-    if (file.open(QIODevice::ReadOnly) && activateCatalog(file.readAll(), false)) {
+    if (!file.open(QIODevice::ReadOnly)) {
+        return;
+    }
+    const QByteArray legacyManifest = file.readAll();
+    m_sourceManifests = splitLegacyManifest(legacyManifest);
+    if (activateCatalog(m_sourceManifests.isEmpty() ? legacyManifest : combineManifests(m_sourceManifests), false)) {
         setState(QStringLiteral("ready"));
     }
 }
@@ -141,6 +196,18 @@ void AerialBackend::refreshCatalog()
     }
     m_catalogBuffer.clear();
     m_sourceManifests.clear();
+    for (const auto &sourceId : {tvosSourceId, macosSourceId}) {
+        QFile sourceFile(sourceCatalogPath(sourceId));
+        if (sourceFile.open(QIODevice::ReadOnly)) {
+            m_sourceManifests.insert(sourceId, sourceFile.readAll());
+        }
+    }
+    if (m_sourceManifests.isEmpty()) {
+        QFile legacyFile(catalogPath());
+        if (legacyFile.open(QIODevice::ReadOnly)) {
+            m_sourceManifests = splitLegacyManifest(legacyFile.readAll());
+        }
+    }
     m_catalogErrors.clear();
     setError({});
     setState(QStringLiteral("refreshing"));
@@ -333,7 +400,13 @@ void AerialBackend::catalogArchiveFinished()
         m_catalogProcessing = false;
         QString error;
         if (!manifest.isEmpty() && !ManifestParser::parse(manifest, &error).isEmpty()) {
-            m_sourceManifests.push_back(manifest);
+            const QString sourceId = m_refreshStage == RefreshStage::TvosCatalog ? tvosSourceId : macosSourceId;
+            m_sourceManifests.insert(sourceId, manifest);
+            QDir().mkpath(dataDirectory());
+            QSaveFile sourceFile(sourceCatalogPath(sourceId));
+            if (!sourceFile.open(QIODevice::WriteOnly) || sourceFile.write(manifest) != manifest.size() || !sourceFile.commit()) {
+                recordCatalogError(QStringLiteral("Could not save the %1 catalog snapshot").arg(sourceId));
+            }
         } else {
             recordCatalogError(manifest.isEmpty() ? QStringLiteral("An Apple catalog archive has no usable entries.json") : error);
         }
@@ -368,7 +441,6 @@ void AerialBackend::finishCatalogRefresh()
         }
         setState(m_catalog.rowCount() > 0 ? QStringLiteral("ready") : QStringLiteral("error"));
     }
-    m_sourceManifests.clear();
     m_catalogErrors.clear();
     startNextPendingDownload();
 }

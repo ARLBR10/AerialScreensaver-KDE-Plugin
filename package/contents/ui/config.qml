@@ -87,26 +87,95 @@ ColumnLayout {
         font.bold: true
     }
 
-    ScrollView {
+    GridView {
+        id: catalogGrid
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
+        model: AerialBackend.catalogModel
+        reuseItems: true
+        cellWidth: width / Math.max(1, Math.floor(width / 220))
+        cellHeight: 178
 
-        ListView {
-            model: AerialBackend.catalogModel
-            reuseItems: true
-            delegate: CheckDelegate {
-                required property string assetId
-                required property string name
-                width: ListView.view.width
-                text: name
-                checked: root.cfg_SelectedAssetIds.indexOf(assetId) !== -1
-                onToggled: {
-                    const values = root.cfg_SelectedAssetIds.slice()
-                    const index = values.indexOf(assetId)
-                    if (checked && index === -1) values.push(assetId)
-                    if (!checked && index !== -1) values.splice(index, 1)
-                    root.cfg_SelectedAssetIds = values
+        delegate: Item {
+            required property string assetId
+            required property string name
+            required property url previewUrl
+            required property string sourceLabel
+            readonly property bool selected: root.cfg_SelectedAssetIds.indexOf(assetId) !== -1
+            width: catalogGrid.cellWidth
+            height: catalogGrid.cellHeight
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: Kirigami.Units.smallSpacing
+                radius: Kirigami.Units.smallSpacing
+                color: selected ? Kirigami.Theme.highlightColor : Kirigami.Theme.alternateBackgroundColor
+                border.width: selected ? 3 : 1
+                border.color: selected ? Kirigami.Theme.highlightColor : Kirigami.Theme.disabledTextColor
+
+                Image {
+                    id: preview
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    height: 112
+                    source: previewUrl
+                    asynchronous: true
+                    fillMode: Image.PreserveAspectCrop
+                    sourceSize.width: 360
+                    sourceSize.height: 202
+                    clip: true
+                }
+
+                Kirigami.Icon {
+                    anchors.centerIn: preview
+                    width: 40
+                    height: 40
+                    source: "image-missing"
+                    visible: preview.status === Image.Error || previewUrl.toString() === ""
+                }
+
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.margins: 8
+                    width: 26
+                    height: 26
+                    radius: 13
+                    color: selected ? Kirigami.Theme.highlightColor : "#99000000"
+
+                    Kirigami.Icon {
+                        anchors.centerIn: parent
+                        width: 18
+                        height: 18
+                        source: selected ? "checkmark" : "list-add"
+                        color: "white"
+                    }
+                }
+
+                Label {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: preview.bottom
+                    anchors.margins: 8
+                    text: name + (sourceLabel.length > 0 ? " (" + sourceLabel + ")" : "")
+                    color: selected ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        const values = root.cfg_SelectedAssetIds.slice()
+                        const index = values.indexOf(assetId)
+                        if (index === -1) values.push(assetId)
+                        else values.splice(index, 1)
+                        root.cfg_SelectedAssetIds = values
+                    }
                 }
             }
         }

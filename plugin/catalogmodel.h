@@ -16,6 +16,7 @@ struct AerialAsset {
     QString id;
     QString name;
     QString shotId;
+    QStringList sourceLabels;
     QUrl previewUrl;
     QVector<AerialVariant> variants;
 };
@@ -29,6 +30,7 @@ public:
         AssetIdRole = Qt::UserRole + 1,
         NameRole,
         PreviewUrlRole,
+        SourceLabelRole,
         CachedRole,
     };
     Q_ENUM(Role)

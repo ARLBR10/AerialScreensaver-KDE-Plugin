@@ -63,6 +63,10 @@ QVector<AerialAsset> ManifestParser::parse(const QByteArray &json, QString *erro
         AerialAsset asset;
         asset.id = object.value(QStringLiteral("id")).toString().trimmed();
         asset.shotId = object.value(QStringLiteral("shotID")).toString().trimmed();
+        const QString sourceLabel = object.value(QStringLiteral("_aerialSourceLabel")).toString().trimmed();
+        if (!sourceLabel.isEmpty()) {
+            asset.sourceLabels.push_back(sourceLabel);
+        }
         asset.name = object.value(QStringLiteral("accessibilityLabel")).toString().trimmed();
         if (asset.name.isEmpty()) {
             asset.name = asset.shotId.isEmpty() ? asset.id : asset.shotId;
@@ -96,6 +100,11 @@ QVector<AerialAsset> ManifestParser::parse(const QByteArray &json, QString *erro
         }
         if (existing.name == existing.id && asset.name != asset.id) {
             existing.name = asset.name;
+        }
+        for (const auto &sourceLabel : std::as_const(asset.sourceLabels)) {
+            if (!existing.sourceLabels.contains(sourceLabel)) {
+                existing.sourceLabels.push_back(sourceLabel);
+            }
         }
         for (auto &variant : asset.variants) {
             const auto duplicate = std::find_if(existing.variants.cbegin(), existing.variants.cend(), [&variant](const AerialVariant &candidate) {

@@ -23,6 +23,11 @@ QVariant CatalogModel::data(const QModelIndex &index, int role) const
         return asset.name;
     case PreviewUrlRole:
         return asset.previewUrl;
+    case SourceLabelRole:
+        if (asset.sourceLabels.contains(QStringLiteral("macOS 26")) && asset.sourceLabels.contains(QStringLiteral("tvOS 26"))) {
+            return QStringLiteral("macOS and tvOS 26");
+        }
+        return asset.sourceLabels.join(QStringLiteral(" and "));
     case CachedRole:
         return false;
     default:
@@ -32,7 +37,7 @@ QVariant CatalogModel::data(const QModelIndex &index, int role) const
 
 QHash<int, QByteArray> CatalogModel::roleNames() const
 {
-    return {{AssetIdRole, "assetId"}, {NameRole, "name"}, {PreviewUrlRole, "previewUrl"}, {CachedRole, "cached"}};
+    return {{AssetIdRole, "assetId"}, {NameRole, "name"}, {PreviewUrlRole, "previewUrl"}, {SourceLabelRole, "sourceLabel"}, {CachedRole, "cached"}};
 }
 
 void CatalogModel::setAssets(QVector<AerialAsset> assets)
