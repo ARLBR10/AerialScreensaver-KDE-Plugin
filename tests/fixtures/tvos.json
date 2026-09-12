@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "unknown": "ignored",
+  "assets": [
+    {
+      "id": "first",
+      "shotID": "FIRST_SHOT",
+      "accessibilityLabel": "Korea and Japan at night",
+      "previewImage": "https://sylvan.apple.com/previews/first.jpg",
+      "url-1080-H264": "https://sylvan.apple.com/videos/first-h264.mov",
+      "url-4K-SDR": "https://sylvan.apple.com/videos/first-4k.mov"
+    },
+    {
+      "id": "second",
+      "shotID": "SECOND_SHOT",
+      "accessibilityLabel": "",
+      "url-1080-H264": "https://sylvan.apple.com/videos/second.mov"
+    },
+    {
+      "id": "missing-video",
+      "accessibilityLabel": "Ignored"
+    },
+    {
+      "id": "insecure",
+      "url-1080-H264": "http://sylvan.apple.com/videos/insecure.mov"
+    },
+    {
+      "id": "first",
+      "url-1080-H264": "https://sylvan.apple.com/videos/duplicate.mov"
+    }
+  ]
+}

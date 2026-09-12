@@ -1,0 +1,24 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Aerial Wallpaper contributors"
+            }
+        ],
+        "Category": "Nature",
+        "Description": "Unofficial Apple Aerial videos for the Plasma desktop",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "org.kde.plasma.aerial",
+        "License": "MIT",
+        "Name": "Aerial (Unofficial)",
+        "Version": "0.1.0"
+    },
+    "Keywords": [
+        "aerial",
+        "video",
+        "wallpaper"
+    ],
+    "X-KDE-ParentApp": "org.kde.plasmashell",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
