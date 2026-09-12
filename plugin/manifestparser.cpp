@@ -3,7 +3,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSet>
+#include <QHash>
+#include <QXmlStreamReader>
+
+#include <algorithm>
 
 namespace
 {
@@ -43,7 +46,7 @@ QVector<AerialAsset> ManifestParser::parse(const QByteArray &json, QString *erro
     }
 
     QVector<AerialAsset> result;
-    QSet<QString> seenIds;
+    QHash<QString, qsizetype> assetIndexes;
     const auto values = document.object().value(QStringLiteral("assets"));
     if (!values.isArray()) {
         if (error) {
@@ -74,9 +77,33 @@ QVector<AerialAsset> ManifestParser::parse(const QByteArray &json, QString *erro
                 asset.variants.push_back({QLatin1String(description.key), url, QLatin1String(description.codec), QLatin1String(description.range), description.height});
             }
         }
-        if (!asset.id.isEmpty() && !asset.variants.isEmpty() && !seenIds.contains(asset.id)) {
-            seenIds.insert(asset.id);
+        if (asset.id.isEmpty() || asset.variants.isEmpty()) {
+            continue;
+        }
+        const auto existingIndex = assetIndexes.constFind(asset.id);
+        if (existingIndex == assetIndexes.cend()) {
+            assetIndexes.insert(asset.id, result.size());
             result.push_back(std::move(asset));
+            continue;
+        }
+
+        auto &existing = result[*existingIndex];
+        if (existing.previewUrl.isEmpty()) {
+            existing.previewUrl = asset.previewUrl;
+        }
+        if (existing.shotId.isEmpty()) {
+            existing.shotId = asset.shotId;
+        }
+        if (existing.name == existing.id && asset.name != asset.id) {
+            existing.name = asset.name;
+        }
+        for (auto &variant : asset.variants) {
+            const auto duplicate = std::find_if(existing.variants.cbegin(), existing.variants.cend(), [&variant](const AerialVariant &candidate) {
+                return candidate.key == variant.key;
+            });
+            if (duplicate == existing.variants.cend()) {
+                existing.variants.push_back(std::move(variant));
+            }
         }
     }
 
@@ -84,6 +111,36 @@ QVector<AerialAsset> ManifestParser::parse(const QByteArray &json, QString *erro
         *error = QStringLiteral("Catalog contains no playable assets");
     }
     return result;
+}
+
+QUrl ManifestParser::parseResourcesUrl(const QByteArray &plist, QString *error)
+{
+    QXmlStreamReader xml(plist);
+    QString currentKey;
+    QUrl resourcesUrl;
+    while (!xml.atEnd()) {
+        xml.readNext();
+        if (!xml.isStartElement()) {
+            continue;
+        }
+        if (xml.name() == QLatin1String("key")) {
+            currentKey = xml.readElementText().trimmed();
+        } else if (xml.name() == QLatin1String("string")) {
+            const QString value = xml.readElementText().trimmed();
+            if (currentKey == QStringLiteral("resources-url") && !value.isEmpty()) {
+                resourcesUrl = QUrl(value);
+            }
+            currentKey.clear();
+        }
+    }
+    if (!xml.hasError() && !resourcesUrl.isEmpty()) {
+        return resourcesUrl;
+    }
+    if (error) {
+        *error = xml.hasError() ? QStringLiteral("Invalid resources plist: %1").arg(xml.errorString())
+                               : QStringLiteral("Resources plist has no resources-url");
+    }
+    return {};
 }
 
 const AerialVariant *ManifestParser::selectVariant(const AerialAsset &asset, const QString &policy)

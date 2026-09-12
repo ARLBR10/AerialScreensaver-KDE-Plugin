@@ -9,7 +9,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QStandardPaths>
@@ -24,8 +26,10 @@
 
 namespace
 {
-const QUrl catalogUrl(QStringLiteral("https://sylvan.apple.com/itunes-assets/Aerials126/v4/c0/45/d9/c045d9d0-9606-1535-62fe-189edb4f79eb/resources-atv-23J-2.tar"));
+const QUrl tvosCatalogUrl(QStringLiteral("https://sylvan.apple.com/itunes-assets/Aerials126/v4/c0/45/d9/c045d9d0-9606-1535-62fe-189edb4f79eb/resources-atv-23J-2.tar"));
+const QUrl macosDiscoveryUrl(QStringLiteral("https://configuration.apple.com/configurations/internetservices/aerials/resources-config-26-0.plist"));
 constexpr qint64 minimumVideoBytes = 64 * 1024;
+constexpr qint64 maximumDiscoveryBytes = 64 * 1024;
 constexpr qint64 maximumCatalogArchiveBytes = 32 * 1024 * 1024;
 constexpr qint64 maximumVideoBytes = 2LL * 1024 * 1024 * 1024;
 
@@ -45,6 +49,22 @@ QByteArray manifestFromArchive(const QByteArray &data)
     }
     return static_cast<const KArchiveFile *>(entry)->data();
 }
+
+QByteArray combineManifests(const QVector<QByteArray> &manifests)
+{
+    QJsonArray assets;
+    for (const auto &manifest : manifests) {
+        const auto document = QJsonDocument::fromJson(manifest);
+        const auto sourceAssets = document.object().value(QStringLiteral("assets")).toArray();
+        for (const auto &asset : sourceAssets) {
+            assets.append(asset);
+        }
+    }
+    QJsonObject combined;
+    combined.insert(QStringLiteral("version"), 1);
+    combined.insert(QStringLiteral("assets"), assets);
+    return QJsonDocument(combined).toJson(QJsonDocument::Compact);
+}
 }
 
 AerialBackend::AerialBackend(QObject *parent)
@@ -63,7 +83,8 @@ QString AerialBackend::downloadingAssetId() const { return m_assetId; }
 bool AerialBackend::isAllowedUrl(const QUrl &url)
 {
     return url.isValid() && url.scheme() == QStringLiteral("https")
-        && url.host().compare(QStringLiteral("sylvan.apple.com"), Qt::CaseInsensitive) == 0;
+        && (url.host().compare(QStringLiteral("sylvan.apple.com"), Qt::CaseInsensitive) == 0
+            || url.host().compare(QStringLiteral("configuration.apple.com"), Qt::CaseInsensitive) == 0);
 }
 
 QString AerialBackend::dataDirectory() const
@@ -119,9 +140,12 @@ void AerialBackend::refreshCatalog()
         return;
     }
     m_catalogBuffer.clear();
+    m_sourceManifests.clear();
+    m_catalogErrors.clear();
     setError({});
     setState(QStringLiteral("refreshing"));
-    startRequest(catalogUrl, RequestKind::Catalog);
+    m_refreshStage = RefreshStage::TvosCatalog;
+    startRequest(tvosCatalogUrl, RequestKind::Catalog);
 }
 
 QStringList AerialBackend::assetIds() const
@@ -217,9 +241,10 @@ void AerialBackend::startRequest(const QUrl &url, RequestKind kind)
             return;
         }
         const QByteArray chunk = m_reply->readAll();
-        if (m_requestKind == RequestKind::Catalog) {
+        if (m_requestKind == RequestKind::Catalog || m_requestKind == RequestKind::Discovery) {
             m_catalogBuffer.append(chunk);
-            if (m_catalogBuffer.size() > maximumCatalogArchiveBytes) {
+            const qint64 limit = m_requestKind == RequestKind::Discovery ? maximumDiscoveryBytes : maximumCatalogArchiveBytes;
+            if (m_catalogBuffer.size() > limit) {
                 m_reply->abort();
             }
         } else if (m_downloadFile) {
@@ -249,31 +274,33 @@ void AerialBackend::requestFinished()
         const QString message = reply->error() == QNetworkReply::NoError
             ? QStringLiteral("The server redirected to an untrusted host") : reply->errorString();
         reply->deleteLater();
+        if (kind == RequestKind::Catalog || kind == RequestKind::Discovery) {
+            recordCatalogError(message);
+            m_catalogBuffer.clear();
+            advanceCatalogRefresh();
+            return;
+        }
         failRequest(message);
         return;
     }
     reply->deleteLater();
 
-    if (kind == RequestKind::Catalog) {
-        m_catalogProcessing = true;
-        setState(QStringLiteral("processing"));
-        auto *watcher = new QFutureWatcher<QByteArray>(this);
-        connect(watcher, &QFutureWatcher<QByteArray>::finished, this, [this, watcher] {
-            const QByteArray manifest = watcher->result();
-            watcher->deleteLater();
-            m_catalogProcessing = false;
-            if (!manifest.isEmpty() && activateCatalog(manifest, true)) {
-                setError({});
-                setState(QStringLiteral("ready"));
-            } else {
-                if (manifest.isEmpty()) {
-                    setError(QStringLiteral("The Apple catalog archive has no usable entries.json"));
-                }
-                setState(m_catalog.rowCount() > 0 ? QStringLiteral("ready") : QStringLiteral("error"));
-            }
-        });
-        watcher->setFuture(QtConcurrent::run(manifestFromArchive, std::move(m_catalogBuffer)));
+    if (kind == RequestKind::Discovery) {
+        QString error;
+        const QUrl resourceUrl = ManifestParser::parseResourcesUrl(m_catalogBuffer, &error);
         m_catalogBuffer.clear();
+        if (!isAllowedUrl(resourceUrl) || resourceUrl.host().compare(QStringLiteral("sylvan.apple.com"), Qt::CaseInsensitive) != 0) {
+            recordCatalogError(error.isEmpty() ? QStringLiteral("The macOS catalog URL is not an allowed Apple HTTPS resource") : error);
+            advanceCatalogRefresh();
+            return;
+        }
+        m_refreshStage = RefreshStage::MacCatalog;
+        startRequest(resourceUrl, RequestKind::Catalog);
+        return;
+    }
+
+    if (kind == RequestKind::Catalog) {
+        catalogArchiveFinished();
         return;
     }
 
@@ -293,6 +320,64 @@ void AerialBackend::requestFinished()
     setState(QStringLiteral("ready"));
     Q_EMIT playableReady(assetId, assetName, QUrl::fromLocalFile(path));
     startNextPendingDownload();
+}
+
+void AerialBackend::catalogArchiveFinished()
+{
+    m_catalogProcessing = true;
+    setState(QStringLiteral("processing"));
+    auto *watcher = new QFutureWatcher<QByteArray>(this);
+    connect(watcher, &QFutureWatcher<QByteArray>::finished, this, [this, watcher] {
+        const QByteArray manifest = watcher->result();
+        watcher->deleteLater();
+        m_catalogProcessing = false;
+        QString error;
+        if (!manifest.isEmpty() && !ManifestParser::parse(manifest, &error).isEmpty()) {
+            m_sourceManifests.push_back(manifest);
+        } else {
+            recordCatalogError(manifest.isEmpty() ? QStringLiteral("An Apple catalog archive has no usable entries.json") : error);
+        }
+        advanceCatalogRefresh();
+    });
+    watcher->setFuture(QtConcurrent::run(manifestFromArchive, std::move(m_catalogBuffer)));
+    m_catalogBuffer.clear();
+}
+
+void AerialBackend::advanceCatalogRefresh()
+{
+    if (m_refreshStage == RefreshStage::TvosCatalog) {
+        m_refreshStage = RefreshStage::MacDiscovery;
+        setState(QStringLiteral("refreshing"));
+        startRequest(macosDiscoveryUrl, RequestKind::Discovery);
+    } else {
+        finishCatalogRefresh();
+    }
+}
+
+void AerialBackend::finishCatalogRefresh()
+{
+    m_refreshStage = RefreshStage::None;
+    const QByteArray combined = combineManifests(m_sourceManifests);
+    const bool activated = !m_sourceManifests.isEmpty() && activateCatalog(combined, true);
+    if (activated) {
+        setError(m_catalogErrors.isEmpty() ? QString() : QStringLiteral("Catalog refreshed with some unavailable sources: %1").arg(m_catalogErrors.join(QStringLiteral("; "))));
+        setState(QStringLiteral("ready"));
+    } else {
+        if (!m_catalogErrors.isEmpty()) {
+            setError(m_catalogErrors.join(QStringLiteral("; ")));
+        }
+        setState(m_catalog.rowCount() > 0 ? QStringLiteral("ready") : QStringLiteral("error"));
+    }
+    m_sourceManifests.clear();
+    m_catalogErrors.clear();
+    startNextPendingDownload();
+}
+
+void AerialBackend::recordCatalogError(const QString &message)
+{
+    if (!message.isEmpty()) {
+        m_catalogErrors.push_back(message);
+    }
 }
 
 void AerialBackend::failRequest(const QString &message)

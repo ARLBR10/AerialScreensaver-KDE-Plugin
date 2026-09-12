@@ -50,7 +50,8 @@ private:
         int cacheLimitMiB;
     };
 
-    enum class RequestKind { None, Catalog, Video };
+    enum class RequestKind { None, Discovery, Catalog, Video };
+    enum class RefreshStage { None, TvosCatalog, MacDiscovery, MacCatalog };
     static bool isAllowedUrl(const QUrl &url);
     QString dataDirectory() const;
     QString videoDirectory() const;
@@ -58,6 +59,10 @@ private:
     QString cachePath(const AerialAsset &asset, const AerialVariant &variant) const;
     void loadCatalog();
     bool activateCatalog(const QByteArray &data, bool persist);
+    void catalogArchiveFinished();
+    void advanceCatalogRefresh();
+    void finishCatalogRefresh();
+    void recordCatalogError(const QString &message);
     void startRequest(const QUrl &url, RequestKind kind);
     void requestFinished();
     void failRequest(const QString &message);
@@ -71,7 +76,10 @@ private:
     QPointer<QNetworkReply> m_reply;
     std::unique_ptr<QSaveFile> m_downloadFile;
     RequestKind m_requestKind = RequestKind::None;
+    RefreshStage m_refreshStage = RefreshStage::None;
     QByteArray m_catalogBuffer;
+    QVector<QByteArray> m_sourceManifests;
+    QStringList m_catalogErrors;
     QString m_state = QStringLiteral("idle");
     QString m_error;
     QString m_assetId;
