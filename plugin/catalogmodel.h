@@ -25,6 +25,9 @@ struct AerialAsset {
 class CatalogModel final : public QAbstractListModel
 {
     Q_OBJECT
+    Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
+    Q_PROPERTY(bool macosEnabled READ macosEnabled WRITE setMacosEnabled NOTIFY macosEnabledChanged)
+    Q_PROPERTY(bool tvosEnabled READ tvosEnabled WRITE setTvosEnabled NOTIFY tvosEnabledChanged)
 
 public:
     enum Role {
@@ -42,12 +45,31 @@ public:
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
+    QString searchText() const;
+    void setSearchText(const QString &searchText);
+    bool macosEnabled() const;
+    void setMacosEnabled(bool enabled);
+    bool tvosEnabled() const;
+    void setTvosEnabled(bool enabled);
+
     void setAssets(QVector<AerialAsset> assets);
     const QVector<AerialAsset> &assets() const;
     const AerialAsset *find(const QString &id) const;
     void setPreviewUrl(const QString &id, const QUrl &localUrl);
     void notifyCacheChanged(const QString &id);
 
+Q_SIGNALS:
+    void searchTextChanged();
+    void macosEnabledChanged();
+    void tvosEnabledChanged();
+
 private:
+    void rebuildVisibleRows();
+    int visibleRowForAsset(int assetRow) const;
+
     QVector<AerialAsset> m_assets;
+    QVector<int> m_visibleRows;
+    QString m_searchText;
+    bool m_macosEnabled = true;
+    bool m_tvosEnabled = true;
 };

@@ -13,6 +13,7 @@ private Q_SLOTS:
     void parsesMacosDiscovery();
     void mergesDuplicateAssetVariants();
     void selectsCompatibilityVariant();
+    void filtersCatalogBySourceAndText();
 };
 
 void ManifestParserTest::parsesAndFiltersAssets()
@@ -76,6 +77,43 @@ void ManifestParserTest::selectsCompatibilityVariant()
     const auto *variant = ManifestParser::selectVariant(assets.constFirst(), QStringLiteral("compatibility"));
     QVERIFY(variant);
     QCOMPARE(variant->codec, QStringLiteral("h264"));
+}
+
+void ManifestParserTest::filtersCatalogBySourceAndText()
+{
+    CatalogModel model;
+    QVector<AerialAsset> assets;
+    auto addAsset = [&assets](const QString &id, const QString &name, const QStringList &sourceLabels) {
+        AerialAsset asset;
+        asset.id = id;
+        asset.name = name;
+        asset.sourceLabels = sourceLabels;
+        assets.push_back(std::move(asset));
+    };
+    addAsset(QStringLiteral("mac-mountains"), QStringLiteral("Mountain Lake"), {QStringLiteral("macOS 26")});
+    addAsset(QStringLiteral("tvos-city"), QStringLiteral("City at Night"), {QStringLiteral("tvOS 26")});
+    addAsset(QStringLiteral("shared-coast"), QStringLiteral("Coastal Cliffs"), {QStringLiteral("macOS 26"), QStringLiteral("tvOS 26")});
+    model.setAssets(std::move(assets));
+
+    QCOMPARE(model.rowCount(), 3);
+
+    model.setTvosEnabled(false);
+    QCOMPARE(model.rowCount(), 2);
+    QCOMPARE(model.data(model.index(0), CatalogModel::AssetIdRole).toString(), QStringLiteral("mac-mountains"));
+    QCOMPARE(model.data(model.index(1), CatalogModel::AssetIdRole).toString(), QStringLiteral("shared-coast"));
+
+    model.setSearchText(QStringLiteral("CLIFF"));
+    QCOMPARE(model.rowCount(), 1);
+    QCOMPARE(model.data(model.index(0), CatalogModel::AssetIdRole).toString(), QStringLiteral("shared-coast"));
+
+    model.setMacosEnabled(false);
+    QCOMPARE(model.rowCount(), 0);
+    model.setTvosEnabled(true);
+    QCOMPARE(model.rowCount(), 1);
+
+    model.setSearchText(QStringLiteral("tvos-city"));
+    QCOMPARE(model.rowCount(), 1);
+    QCOMPARE(model.data(model.index(0), CatalogModel::NameRole).toString(), QStringLiteral("City at Night"));
 }
 
 QTEST_MAIN(ManifestParserTest)

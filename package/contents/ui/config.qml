@@ -7,6 +7,8 @@ import org.kde.plasma.aerial.private 1.0
 ColumnLayout {
     id: root
 
+    property var configDialog
+    property var wallpaperConfiguration
     property var cfg_SelectedAssetIds: []
     property alias cfg_QualityPolicy: quality.currentValue
     property alias cfg_PlaybackOrder: order.currentValue
@@ -85,6 +87,44 @@ ColumnLayout {
     Label {
         text: "Aerials (leave all unchecked to rotate through the full catalog)"
         font.bold: true
+    }
+
+    RowLayout {
+        Layout.fillWidth: true
+
+        TextField {
+            id: catalogSearch
+            Layout.fillWidth: true
+            placeholderText: "Search aerials"
+        }
+
+        Label { text: "Sources:" }
+        CheckBox {
+            id: macosFilter
+            text: "macOS"
+            checked: true
+        }
+        CheckBox {
+            id: tvosFilter
+            text: "tvOS"
+            checked: true
+        }
+    }
+
+    Binding {
+        target: AerialBackend.catalogModel
+        property: "searchText"
+        value: catalogSearch.text
+    }
+    Binding {
+        target: AerialBackend.catalogModel
+        property: "macosEnabled"
+        value: macosFilter.checked
+    }
+    Binding {
+        target: AerialBackend.catalogModel
+        property: "tvosEnabled"
+        value: tvosFilter.checked
     }
 
     GridView {
