@@ -7,16 +7,33 @@ WallpaperItem {
     id: root
 
     readonly property var configuredIds: configuration.SelectedAssetIds || []
+    readonly property int crossfadeDuration: Math.min(5000, Math.max(250, configuration.CrossfadeDurationMs || 1200))
+    readonly property var activePlayer: useFirstPlayer ? playerOne : playerTwo
+    readonly property var standbyPlayer: useFirstPlayer ? playerTwo : playerOne
+    readonly property var activeOutput: useFirstPlayer ? outputOne : outputTwo
+    readonly property var standbyOutput: useFirstPlayer ? outputTwo : outputOne
+    readonly property bool hasVisibleVideo:
+        (outputOne.opacity > 0 && playerOne.source.toString() !== "" && playerOne.error === MediaPlayer.NoError)
+        || (outputTwo.opacity > 0 && playerTwo.source.toString() !== "" && playerTwo.error === MediaPlayer.NoError)
     property var queue: []
     property int queueIndex: -1
     property int consecutiveFailures: 0
+    property bool useFirstPlayer: true
+    property int transitionState: 0 // 0: idle, 1: awaiting first frame, 2: fading
     property url activeUrl: ""
     property string activeName: ""
     property string preparedAssetId: ""
     property string preparedName: ""
     property url preparedUrl: ""
+    property int preparedQueueIndex: -1
 
     function rebuildQueue() {
+        cancelCrossfade()
+        retryTimer.stop()
+        consecutiveFailures = 0
+        if (activePlayer.mediaStatus === MediaPlayer.EndOfMedia || activePlayer.error !== MediaPlayer.NoError) {
+            releaseActive()
+        }
         const available = AerialBackend.assetIds()
         const selected = configuredIds.length > 0
             ? available.filter(id => configuredIds.indexOf(id) !== -1)
@@ -31,24 +48,38 @@ WallpaperItem {
             }
         }
         queueIndex = -1
+        clearPrepared()
+    }
+
+    function clearPrepared() {
+        AerialBackend.markPlaying(preparedUrl, false)
         preparedAssetId = ""
         preparedName = ""
         preparedUrl = ""
+        preparedQueueIndex = -1
+        if (transitionState === 0) {
+            standbyPlayer.stop()
+            standbyPlayer.source = ""
+            standbyOutput.opacity = 0
+        }
     }
 
     function activate(assetId, name, localUrl) {
+        retryTimer.stop()
         AerialBackend.markPlaying(activeUrl, false)
         activeUrl = localUrl
         activeName = name
         consecutiveFailures = 0
-        player.source = localUrl
+        activeOutput.opacity = 1
+        activePlayer.source = localUrl
         AerialBackend.markPlaying(localUrl, true)
-        player.play()
+        activePlayer.play()
         prefetchTimer.restart()
     }
 
     function prefetchNext() {
-        if (queue.length < 2 || queueIndex < 0) return
+        if (queue.length === 0 || queueIndex < 0 || transitionState !== 0) return
+        if (consecutiveFailures >= Math.min(3, queue.length)) return
         const nextIndex = (queueIndex + 1) % queue.length
         if (queue[nextIndex] !== preparedAssetId) {
             AerialBackend.ensureDownloaded(queue[nextIndex], configuration.QualityPolicy, configuration.CacheLimitMiB)
@@ -56,24 +87,148 @@ WallpaperItem {
     }
 
     function next() {
+        if (transitionState !== 0) return
         if (queue.length === 0) {
             rebuildQueue()
         }
         if (queue.length === 0 || consecutiveFailures >= Math.min(3, queue.length)) {
             return
         }
-        queueIndex = (queueIndex + 1) % queue.length
-        if (preparedAssetId === queue[queueIndex] && preparedUrl.toString() !== "") {
-            const assetId = preparedAssetId
-            const name = preparedName
-            const localUrl = preparedUrl
-            preparedAssetId = ""
-            preparedName = ""
-            preparedUrl = ""
-            activate(assetId, name, localUrl)
+        const nextIndex = (queueIndex + 1) % queue.length
+        if (preparedQueueIndex === nextIndex && preparedAssetId === queue[nextIndex] && preparedUrl.toString() !== "") {
+            beginCrossfade()
             return
         }
+        queueIndex = nextIndex
         AerialBackend.ensureDownloaded(queue[queueIndex], configuration.QualityPolicy, configuration.CacheLimitMiB)
+    }
+
+    function maybeBeginCrossfade(mediaPlayer) {
+        if (mediaPlayer !== activePlayer || transitionState !== 0 || preparedUrl.toString() === "" || mediaPlayer.duration <= 0) return
+        const leadTime = crossfadeDuration + 300
+        if (mediaPlayer.position >= mediaPlayer.duration - leadTime) {
+            beginCrossfade()
+        }
+    }
+
+    function beginCrossfade() {
+        if (transitionState !== 0 || preparedUrl.toString() === "") return
+        transitionState = 1
+        standbyOutput.opacity = 0
+        if (standbyPlayer.source.toString() !== preparedUrl.toString()) {
+            standbyPlayer.source = preparedUrl
+        }
+        standbyPlayer.play()
+        firstFrameTimeout.restart()
+    }
+
+    function handleVideoFrame(mediaPlayer, videoOutput) {
+        if (transitionState !== 1 || mediaPlayer !== standbyPlayer) return
+        if (mediaPlayer.source.toString() !== preparedUrl.toString() || videoOutput.videoSink.videoSize.width <= 0) return
+        firstFrameTimeout.stop()
+        transitionState = 2
+        crossfadeAnimation.start()
+    }
+
+    function finishCrossfade() {
+        retryTimer.stop()
+        const previousPlayer = activePlayer
+        const previousOutput = activeOutput
+        const previousUrl = activeUrl
+
+        previousOutput.opacity = 0
+        standbyOutput.opacity = 1
+        activeUrl = preparedUrl
+        activeName = preparedName
+        queueIndex = preparedQueueIndex
+        useFirstPlayer = !useFirstPlayer
+        transitionState = 0
+        consecutiveFailures = 0
+        preparedAssetId = ""
+        preparedName = ""
+        preparedUrl = ""
+        preparedQueueIndex = -1
+
+        previousPlayer.stop()
+        previousPlayer.source = ""
+        AerialBackend.markPlaying(previousUrl, false)
+        prefetchTimer.restart()
+    }
+
+    function cancelCrossfade() {
+        if (transitionState !== 0) {
+            crossfadeAnimation.stop()
+            firstFrameTimeout.stop()
+            standbyPlayer.stop()
+            standbyPlayer.source = ""
+            standbyOutput.opacity = 0
+            activeOutput.opacity = 1
+            transitionState = 0
+        }
+        clearPrepared()
+    }
+
+    function releaseActive() {
+        const previousUrl = activeUrl
+        activePlayer.stop()
+        activePlayer.source = ""
+        activeUrl = ""
+        AerialBackend.markPlaying(previousUrl, false)
+    }
+
+    function failCrossfade() {
+        const failedIndex = preparedQueueIndex
+        cancelCrossfade()
+        consecutiveFailures++
+        if (failedIndex >= 0) {
+            queueIndex = failedIndex
+        }
+        const activeHealthy = activePlayer.source.toString() !== ""
+            && activePlayer.error === MediaPlayer.NoError
+            && activePlayer.mediaStatus !== MediaPlayer.EndOfMedia
+        if (activeHealthy) {
+            prefetchTimer.restart()
+        } else {
+            releaseActive()
+            retryTimer.restart()
+        }
+    }
+
+    function handleMediaStatus(mediaPlayer) {
+        if (mediaPlayer.mediaStatus !== MediaPlayer.EndOfMedia) return
+        if (mediaPlayer === standbyPlayer && transitionState !== 0) {
+            failCrossfade()
+            return
+        }
+        if (mediaPlayer !== activePlayer) return
+        if (transitionState === 0) {
+            if (preparedUrl.toString() !== "") {
+                beginCrossfade()
+            } else {
+                releaseActive()
+                next()
+            }
+        }
+    }
+
+    function handlePlaybackError(mediaPlayer, errorString) {
+        console.warn("Aerial playback error:", errorString)
+        if (mediaPlayer === standbyPlayer && transitionState !== 0) {
+            failCrossfade()
+            return
+        }
+        if (mediaPlayer !== activePlayer) return
+        if (transitionState === 2) {
+            crossfadeAnimation.stop()
+            finishCrossfade()
+            return
+        }
+        if (transitionState === 1) {
+            cancelCrossfade()
+        }
+        consecutiveFailures++
+        releaseActive()
+        retryTimer.restart()
     }
 
     Rectangle {
@@ -81,17 +236,28 @@ WallpaperItem {
         color: "#101418"
 
         VideoOutput {
-            id: output
+            id: outputOne
             anchors.fill: parent
+            z: root.useFirstPlayer ? 1 : 2
+            opacity: 1
             fillMode: configuration.FillMode === 0 ? VideoOutput.PreserveAspectFit : VideoOutput.PreserveAspectCrop
-            visible: root.activeUrl.toString() !== "" && player.error === MediaPlayer.NoError
+            visible: playerOne.source.toString() !== "" && playerOne.error === MediaPlayer.NoError
+        }
+
+        VideoOutput {
+            id: outputTwo
+            anchors.fill: parent
+            z: root.useFirstPlayer ? 2 : 1
+            opacity: 0
+            fillMode: configuration.FillMode === 0 ? VideoOutput.PreserveAspectFit : VideoOutput.PreserveAspectCrop
+            visible: playerTwo.source.toString() !== "" && playerTwo.error === MediaPlayer.NoError
         }
 
         Column {
             anchors.centerIn: parent
             width: Math.min(parent.width * 0.7, 520)
             spacing: 10
-            visible: !output.visible
+            visible: !root.hasVisibleVideo
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -122,29 +288,59 @@ WallpaperItem {
     }
 
     AudioOutput {
-        id: silentAudio
+        id: silentAudioOne
+        muted: true
+        volume: 0
+    }
+
+    AudioOutput {
+        id: silentAudioTwo
         muted: true
         volume: 0
     }
 
     MediaPlayer {
-        id: player
-        audioOutput: silentAudio
-        videoOutput: output
+        id: playerOne
+        audioOutput: silentAudioOne
+        videoOutput: outputOne
+        onPositionChanged: root.maybeBeginCrossfade(playerOne)
+        onMediaStatusChanged: root.handleMediaStatus(playerOne)
+        onErrorOccurred: function(error, errorString) { root.handlePlaybackError(playerOne, errorString) }
+    }
 
-        onMediaStatusChanged: {
-            if (mediaStatus === MediaPlayer.EndOfMedia) {
-                AerialBackend.markPlaying(root.activeUrl, false)
-                root.next()
-            }
-        }
-        onErrorOccurred: function(error, errorString) {
-            console.warn("Aerial playback error:", errorString)
-            AerialBackend.markPlaying(root.activeUrl, false)
-            root.activeUrl = ""
-            root.consecutiveFailures++
-            source = ""
-            retryTimer.restart()
+    MediaPlayer {
+        id: playerTwo
+        audioOutput: silentAudioTwo
+        videoOutput: outputTwo
+        onPositionChanged: root.maybeBeginCrossfade(playerTwo)
+        onMediaStatusChanged: root.handleMediaStatus(playerTwo)
+        onErrorOccurred: function(error, errorString) { root.handlePlaybackError(playerTwo, errorString) }
+    }
+
+    Connections {
+        target: outputOne.videoSink
+        function onVideoFrameChanged() { root.handleVideoFrame(playerOne, outputOne) }
+    }
+
+    Connections {
+        target: outputTwo.videoSink
+        function onVideoFrameChanged() { root.handleVideoFrame(playerTwo, outputTwo) }
+    }
+
+    ParallelAnimation {
+        id: crossfadeAnimation
+        NumberAnimation { target: root.activeOutput; property: "opacity"; to: 0; duration: root.crossfadeDuration; easing.type: Easing.InOutCubic }
+        NumberAnimation { target: root.standbyOutput; property: "opacity"; to: 1; duration: root.crossfadeDuration; easing.type: Easing.InOutCubic }
+        onFinished: root.finishCrossfade()
+    }
+
+    Timer {
+        id: firstFrameTimeout
+        interval: 3000
+        repeat: false
+        onTriggered: {
+            console.warn("Aerial playback error: next video did not produce a frame")
+            root.failCrossfade()
         }
     }
 
@@ -167,23 +363,24 @@ WallpaperItem {
 
         function onCatalogChanged() {
             root.rebuildQueue()
-            if (player.source.toString() === "") {
+            if (root.activePlayer.source.toString() === "") {
                 root.next()
             }
         }
         function onPlayableReady(assetId, name, localUrl) {
-            if (root.queue.length === 0) {
-                return
-            }
-            if (root.queue[root.queueIndex] === assetId) {
+            if (root.queue.length === 0) return
+            if (root.transitionState === 0 && root.queue[root.queueIndex] === assetId && root.activePlayer.source.toString() === "") {
                 root.activate(assetId, name, localUrl)
                 return
             }
             const nextIndex = (root.queueIndex + 1) % root.queue.length
-            if (root.queue[nextIndex] === assetId) {
+            if (root.queue[nextIndex] === assetId && root.transitionState === 0) {
+                root.clearPrepared()
                 root.preparedAssetId = assetId
                 root.preparedName = name
                 root.preparedUrl = localUrl
+                root.preparedQueueIndex = nextIndex
+                AerialBackend.markPlaying(localUrl, true)
             }
         }
         function onOperationFailed(assetId, message) {
@@ -203,5 +400,8 @@ WallpaperItem {
             AerialBackend.refreshCatalog()
         }
     }
-    Component.onDestruction: AerialBackend.markPlaying(activeUrl, false)
+    Component.onDestruction: {
+        AerialBackend.markPlaying(activeUrl, false)
+        AerialBackend.markPlaying(preparedUrl, false)
+    }
 }

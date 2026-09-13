@@ -23,8 +23,9 @@ directories.
   QML/UI thread.
 - Keep Apple manifest keys in the C++ backend. QML consumes only normalized
   asset/model roles and compact IDs.
-- Use one `MediaPlayer` per wallpaper instance. Crossfade and multiple
-  simultaneous decoders are intentionally deferred.
+- Use one active and one standby `MediaPlayer` per wallpaper instance. The
+  standby player may decode only during a bounded crossfade and must release
+  its previous source after transition.
 - Apple Aerials are always muted.
 
 ## Architecture

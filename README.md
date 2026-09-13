@@ -5,9 +5,9 @@ cache and plays them through Qt Multimedia. This project is not affiliated with
 or endorsed by Apple.
 
 The initial implementation uses the tvOS compatibility catalog and defaults to
-1080p H.264 SDR. It uses one media decoder and one serialized download at a
-time. Videos are muted and are never handed to Qt Multimedia until an atomic
-download has completed.
+1080p H.264 SDR. It briefly uses two media decoders to crossfade between local
+videos and uses one serialized download at a time. Videos are muted and are
+never handed to Qt Multimedia until an atomic download has completed.
 
 ## Build
 

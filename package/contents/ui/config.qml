@@ -13,6 +13,7 @@ ColumnLayout {
     property alias cfg_QualityPolicy: quality.currentValue
     property alias cfg_PlaybackOrder: order.currentValue
     property int cfg_FillMode: 1
+    property alias cfg_CrossfadeDurationMs: crossfadeDuration.value
     property alias cfg_CacheLimitMiB: cacheLimit.value
     property string cfg_LastAssetId: ""
 
@@ -58,6 +59,20 @@ ColumnLayout {
             currentIndex: root.cfg_FillMode
             onActivated: root.cfg_FillMode = currentIndex
         }
+    }
+
+    RowLayout {
+        Layout.fillWidth: true
+        Label { text: "Crossfade" }
+        SpinBox {
+            id: crossfadeDuration
+            from: 250
+            to: 5000
+            stepSize: 250
+            editable: true
+        }
+        Label { text: "ms" }
+        Item { Layout.fillWidth: true }
     }
 
     RowLayout {

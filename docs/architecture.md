@@ -66,7 +66,8 @@ a QML module using `ecm_add_qml_module(...)`.
 Responsibilities:
 
 - Root item is `WallpaperItem` from `org.kde.plasma.plasmoid`.
-- Own one `MediaPlayer`, muted `AudioOutput`, and `VideoOutput` for MVP.
+- Own active and standby `MediaPlayer`, muted `AudioOutput`, and `VideoOutput`
+  pairs so the next local video can be decoded before transition.
 - Select aspect fill, fit, or stretch.
 - Advance when `MediaPlayer.EndOfMedia` is reached.
 - Surface `onErrorOccurred` and request a different compatible item.
@@ -74,8 +75,9 @@ Responsibilities:
 - Expose contextual actions such as Next, Pause, and Open Settings.
 - Render a cached preview or neutral background while loading and on failure.
 
-Crossfade requires two simultaneous decoders and more GPU/video memory. It is
-explicitly deferred until single-player stability and power usage are known.
+Crossfade briefly uses two simultaneous decoders and more GPU/video memory. The
+standby player is assigned only a completed local file, starts near the end of
+the active video, and is released after the transition.
 
 ### QML configuration
 

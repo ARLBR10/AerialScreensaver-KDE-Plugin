@@ -8,6 +8,7 @@
     <entry name="QualityPolicy" type="String"><default>compatibility</default></entry>
     <entry name="PlaybackOrder" type="String"><default>shuffle</default></entry>
     <entry name="FillMode" type="Int"><default>1</default></entry>
+    <entry name="CrossfadeDurationMs" type="Int"><default>1200</default></entry>
     <entry name="CacheLimitMiB" type="Int"><default>4096</default></entry>
     <entry name="LastAssetId" type="String"><default></default></entry>
   </group>

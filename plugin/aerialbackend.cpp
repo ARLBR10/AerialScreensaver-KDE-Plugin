@@ -482,9 +482,12 @@ void AerialBackend::requestFinished()
     m_assetName.clear();
     m_downloadPath.clear();
     Q_EMIT downloadingAssetIdChanged();
-    enforceCacheLimit(m_cacheLimitBytes);
     setState(QStringLiteral("ready"));
-    Q_EMIT playableReady(assetId, assetName, QUrl::fromLocalFile(path));
+    const QUrl localUrl = QUrl::fromLocalFile(path);
+    markPlaying(localUrl, true);
+    Q_EMIT playableReady(assetId, assetName, localUrl);
+    markPlaying(localUrl, false);
+    enforceCacheLimit(m_cacheLimitBytes);
     startNextPendingDownload();
 }
 

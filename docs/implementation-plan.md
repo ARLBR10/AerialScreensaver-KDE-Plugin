@@ -139,7 +139,6 @@ Exit criteria:
 
 ## Deferred Work
 
-- Crossfade between videos.
 - Synchronized multi-monitor playback.
 - HDR enabled by default.
 - macOS 240 fps slow-motion parity.
