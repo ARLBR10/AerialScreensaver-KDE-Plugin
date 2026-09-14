@@ -52,6 +52,9 @@ standalone package installed only with `kpackagetool6` is not sufficient.
 ## Runtime Notes
 
 - A working Qt Multimedia FFmpeg backend and H.264 decoder are required.
+- Crossfade can be disabled with **0 ms** to avoid overlapping video decoders.
+  For freezes after a kernel/driver update, see the
+  [software-decoding workaround](docs/graphics-troubleshooting.md).
 - The first run downloads the catalog, then a complete selected video. This can
   take several minutes depending on the connection.
 - Cache data is stored through `QStandardPaths` and defaults to a 4 GiB limit.

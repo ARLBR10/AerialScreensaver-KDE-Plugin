@@ -66,12 +66,12 @@ ColumnLayout {
         Label { text: "Crossfade" }
         SpinBox {
             id: crossfadeDuration
-            from: 250
+            from: 0
             to: 5000
             stepSize: 250
             editable: true
         }
-        Label { text: "ms" }
+        Label { text: "ms (0 disables crossfade)" }
         Item { Layout.fillWidth: true }
     }
 

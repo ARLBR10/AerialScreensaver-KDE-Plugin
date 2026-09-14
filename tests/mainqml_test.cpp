@@ -64,15 +64,20 @@ public:
     int playCount() const { return m_playCount; }
     int stopCount() const { return m_stopCount; }
 
-    void setSource(const QString &source) { m_source = source; }
+    QStringList events;
+    void setSource(const QString &source)
+    {
+        events.append(QStringLiteral("source:") + source);
+        m_source = source;
+    }
     void setError(int error) { m_error = error; }
     void setMediaStatus(int mediaStatus) { m_mediaStatus = mediaStatus; }
     void setDuration(qreal duration) { m_duration = duration; }
     void setPosition(qreal position) { m_position = position; }
 
 public Q_SLOTS:
-    void play() { ++m_playCount; }
-    void stop() { ++m_stopCount; }
+    void play() { events.append(QStringLiteral("play")); ++m_playCount; }
+    void stop() { events.append(QStringLiteral("stop")); ++m_stopCount; }
 
 private:
     QString m_source;
@@ -374,6 +379,20 @@ public:
         }
 
         QString bindingError;
+        const QString durationBinding = extractBinding(qml,
+                                                       QStringLiteral("readonly property int crossfadeDuration:"),
+                                                       QStringLiteral("readonly property var activePlayer:"),
+                                                       &bindingError);
+        if (durationBinding.isEmpty()) {
+            if (error) *error = bindingError;
+            return false;
+        }
+        const QJSValue durationResult = engine.evaluate(QStringLiteral(
+            "Object.defineProperty(this, 'crossfadeDuration', { get: function() { return (%1); } });").arg(durationBinding));
+        if (durationResult.isError()) {
+            if (error) *error = durationResult.toString();
+            return false;
+        }
         const QString binding = extractBinding(qml,
                                                QStringLiteral("readonly property bool hasVisibleVideo:"),
                                                QStringLiteral("property var failedAssetIds"),
@@ -603,7 +622,49 @@ private Q_SLOTS:
     void rejectedIdsAreSkippedAfterPrefetchFailure();
     void firstFrameResetPreservesPrefetchFailure();
     void fallbackWaitsForFrameReady();
+    void disabledCrossfadeReleasesDecoderBeforeNextVideo();
 };
+
+void MainQmlTest::disabledCrossfadeReleasesDecoderBeforeNextVideo()
+{
+    MainQmlHarness harness;
+    QString error;
+    QVERIFY2(harness.load(&error), qPrintable(error));
+    QJSValue configuration = harness.global(QStringLiteral("configuration"));
+    configuration.setProperty(QStringLiteral("CrossfadeDurationMs"), 0);
+    QCOMPARE(harness.globalInt(QStringLiteral("crossfadeDuration")), 0);
+    harness.setQueue({QStringLiteral("active"), QStringLiteral("prepared")});
+    harness.setGlobalInt(QStringLiteral("queueIndex"), 0);
+    QJSValue result = harness.call(QStringLiteral("activate"),
+        {QJSValue(QStringLiteral("active")), QJSValue(QStringLiteral("Active")), QJSValue(QStringLiteral("file:///cache/active.mov"))});
+    QVERIFY2(!result.isError(), qPrintable(result.toString()));
+    harness.setGlobalString(QStringLiteral("preparedAssetId"), QStringLiteral("prepared"));
+    harness.setGlobalString(QStringLiteral("preparedName"), QStringLiteral("Prepared"));
+    harness.setGlobalString(QStringLiteral("preparedUrl"), QStringLiteral("file:///cache/prepared.mov"));
+    harness.setGlobalInt(QStringLiteral("preparedQueueIndex"), 1);
+    harness.playerOne.setDuration(10000);
+    harness.playerOne.setPosition(9999);
+    harness.playerOne.events.clear();
+
+    result = harness.call(QStringLiteral("maybeBeginCrossfade"), {harness.global(QStringLiteral("playerOne"))});
+    QVERIFY2(!result.isError(), qPrintable(result.toString()));
+    QVERIFY(harness.playerOne.events.isEmpty());
+    QCOMPARE(harness.playerTwo.playCount(), 0);
+
+    harness.playerOne.setMediaStatus(1); // EndOfMedia
+    result = harness.call(QStringLiteral("handleMediaStatus"), {harness.global(QStringLiteral("playerOne"))});
+    QVERIFY2(!result.isError(), qPrintable(result.toString()));
+    QCOMPARE(harness.playerOne.events, QStringList({QStringLiteral("stop"), QStringLiteral("source:"),
+        QStringLiteral("source:file:///cache/prepared.mov"), QStringLiteral("play")}));
+    QCOMPARE(harness.playerTwo.playCount(), 0);
+    QVERIFY(harness.playerTwo.source().isEmpty());
+    QVERIFY(!harness.firstFrameTimeout.running());
+    QVERIFY(!harness.crossfadeAnimation.running());
+    QCOMPARE(harness.globalInt(QStringLiteral("transitionState")), 0);
+    QCOMPARE(harness.globalInt(QStringLiteral("queueIndex")), 1);
+    QCOMPARE(harness.globalString(QStringLiteral("activeAssetId")), QStringLiteral("prepared"));
+    QVERIFY(harness.globalString(QStringLiteral("preparedUrl")).isEmpty());
+}
 
 void MainQmlTest::finiteAttemptsAcrossBrokenCachedSources()
 {

@@ -7,7 +7,8 @@ WallpaperItem {
     id: root
 
     readonly property var configuredIds: configuration.SelectedAssetIds || []
-    readonly property int crossfadeDuration: Math.min(5000, Math.max(250, configuration.CrossfadeDurationMs || 1000))
+    readonly property int crossfadeDuration: configuration.CrossfadeDurationMs === 0
+        ? 0 : Math.min(5000, Math.max(250, configuration.CrossfadeDurationMs || 1000))
     readonly property var activePlayer: useFirstPlayer ? playerOne : playerTwo
     readonly property var standbyPlayer: useFirstPlayer ? playerTwo : playerOne
     readonly property var activeOutput: useFirstPlayer ? outputOne : outputTwo
@@ -129,6 +130,7 @@ WallpaperItem {
     }
 
     function maybeBeginCrossfade(mediaPlayer) {
+        if (crossfadeDuration === 0) return
         if (mediaPlayer !== activePlayer || transitionState !== 0 || preparedUrl.toString() === "" || mediaPlayer.duration <= 0) return
         const leadTime = crossfadeDuration + 300
         if (mediaPlayer.position >= mediaPlayer.duration - leadTime) {
@@ -138,6 +140,14 @@ WallpaperItem {
 
     function beginCrossfade() {
         if (transitionState !== 0 || preparedUrl.toString() === "") return
+        if (crossfadeDuration === 0) {
+            // Release the old decoder before opening the next file on fragile drivers.
+            releaseActive()
+            queueIndex = preparedQueueIndex
+            activate(preparedAssetId, preparedName, preparedUrl)
+            clearPrepared()
+            return
+        }
         transitionState = 1
         standbyOutput.frameReady = false
         standbyOutput.opacity = 0
