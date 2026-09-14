@@ -158,7 +158,11 @@ const AerialVariant *ManifestParser::selectVariant(const AerialAsset &asset, con
     if (policy == QStringLiteral("hdr")) {
         preferred = {QStringLiteral("url-4K-HDR"), QStringLiteral("url-1080-HDR")};
     } else if (policy == QStringLiteral("4k-sdr")) {
-        preferred = {QStringLiteral("url-4K-SDR")};
+        preferred = {
+            QStringLiteral("url-4K-SDR"),
+            QStringLiteral("url-4K-SDR-120FPS"),
+            QStringLiteral("url-4K-SDR-240FPS"),
+        };
     } else if (policy == QStringLiteral("1080-sdr")) {
         preferred = {QStringLiteral("url-1080-SDR"), QStringLiteral("url-1080-H264")};
     } else {

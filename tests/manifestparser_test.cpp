@@ -13,6 +13,7 @@ private Q_SLOTS:
     void parsesMacosDiscovery();
     void mergesDuplicateAssetVariants();
     void selectsCompatibilityVariant();
+    void selectsHighFrameRate4kVariant();
     void filtersCatalogBySourceAndText();
 };
 
@@ -77,6 +78,24 @@ void ManifestParserTest::selectsCompatibilityVariant()
     const auto *variant = ManifestParser::selectVariant(assets.constFirst(), QStringLiteral("compatibility"));
     QVERIFY(variant);
     QCOMPARE(variant->codec, QStringLiteral("h264"));
+}
+
+void ManifestParserTest::selectsHighFrameRate4kVariant()
+{
+    const QByteArray json = QByteArrayLiteral(R"({"assets":[{
+        "id":"high-frame-rate",
+        "url-1080-H264":"https://sylvan.apple.com/video-1080.mov",
+        "url-4K-SDR-240FPS":"https://sylvan.apple.com/video-4k.mov"
+    }]})");
+    QString error;
+    const auto assets = ManifestParser::parse(json, &error);
+    QCOMPARE(error, QString());
+    QCOMPARE(assets.size(), 1);
+
+    const auto *variant = ManifestParser::selectVariant(assets.constFirst(), QStringLiteral("4k-sdr"));
+    QVERIFY(variant);
+    QCOMPARE(variant->key, QStringLiteral("url-4K-SDR-240FPS"));
+    QCOMPARE(variant->height, 2160);
 }
 
 void ManifestParserTest::filtersCatalogBySourceAndText()

@@ -23,6 +23,7 @@
 #endif
 
 #include <algorithm>
+#include <memory>
 
 namespace
 {
@@ -33,8 +34,81 @@ const QString macosSourceId(QStringLiteral("macos-26"));
 constexpr qint64 minimumVideoBytes = 64 * 1024;
 constexpr qint64 maximumDiscoveryBytes = 64 * 1024;
 constexpr qint64 maximumCatalogArchiveBytes = 32 * 1024 * 1024;
+constexpr qint64 maximumManifestBytes = 16 * 1024 * 1024;
 constexpr qint64 maximumPreviewBytes = 8 * 1024 * 1024;
 constexpr qint64 maximumVideoBytes = 2LL * 1024 * 1024 * 1024;
+constexpr qint64 maximumReplyReadBytes = 256 * 1024;
+constexpr int requestDeadlineMs = 5 * 60 * 1000;
+constexpr int previewDeadlineMs = 60 * 1000;
+
+QByteArray readCapped(QIODevice *device, qint64 maximumBytes)
+{
+    if (!device || maximumBytes < 0) {
+        return {};
+    }
+
+    QByteArray data;
+    while (!device->atEnd()) {
+        const qint64 remaining = maximumBytes - data.size();
+        if (remaining < 0) {
+            return {};
+        }
+        const QByteArray chunk = device->read(std::min(maximumReplyReadBytes, remaining + 1));
+        if (chunk.isEmpty()) {
+            if (device->atEnd()) {
+                break;
+            }
+            return {};
+        }
+        data.append(chunk);
+        if (data.size() > maximumBytes) {
+            return {};
+        }
+    }
+    return data;
+}
+
+QByteArray readCatalogFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() < 0 || file.size() > maximumManifestBytes) {
+        return {};
+    }
+    return readCapped(&file, maximumManifestBytes);
+}
+
+QByteArray readReplyChunk(QNetworkReply *reply, qint64 remaining)
+{
+    if (!reply || remaining < 0) {
+        return {};
+    }
+    return reply->read(std::min(maximumReplyReadBytes, remaining + 1));
+}
+
+void configureReply(QNetworkReply *reply, qint64 maximumBytes, int deadlineMs)
+{
+    if (!reply) {
+        return;
+    }
+
+    reply->setReadBufferSize(std::min(maximumReplyReadBytes, maximumBytes + 1));
+    const QPointer<QNetworkReply> guardedReply(reply);
+    QObject::connect(reply, &QNetworkReply::metaDataChanged, reply, [guardedReply, maximumBytes] {
+        if (!guardedReply) {
+            return;
+        }
+        bool ok = false;
+        const qint64 contentLength = guardedReply->header(QNetworkRequest::ContentLengthHeader).toLongLong(&ok);
+        if (ok && contentLength > maximumBytes) {
+            guardedReply->abort();
+        }
+    });
+    QTimer::singleShot(deadlineMs, reply, [guardedReply] {
+        if (guardedReply && !guardedReply->isFinished()) {
+            guardedReply->abort();
+        }
+    });
+}
 
 QByteArray manifestFromArchive(const QByteArray &data)
 {
@@ -50,7 +124,12 @@ QByteArray manifestFromArchive(const QByteArray &data)
     if (!entry || !entry->isFile()) {
         return {};
     }
-    return static_cast<const KArchiveFile *>(entry)->data();
+    const auto *archiveFile = static_cast<const KArchiveFile *>(entry);
+    if (archiveFile->size() <= 0 || archiveFile->size() > maximumManifestBytes) {
+        return {};
+    }
+    std::unique_ptr<QIODevice> device(archiveFile->createDevice());
+    return readCapped(device.get(), maximumManifestBytes);
 }
 
 QByteArray combineManifests(const QHash<QString, QByteArray> &manifests)
@@ -73,7 +152,8 @@ QByteArray combineManifests(const QHash<QString, QByteArray> &manifests)
     QJsonObject combined;
     combined.insert(QStringLiteral("version"), 1);
     combined.insert(QStringLiteral("assets"), assets);
-    return QJsonDocument(combined).toJson(QJsonDocument::Compact);
+    const QByteArray result = QJsonDocument(combined).toJson(QJsonDocument::Compact);
+    return result.size() <= maximumManifestBytes ? result : QByteArray();
 }
 
 QHash<QString, QByteArray> splitLegacyManifest(const QByteArray &manifest)
@@ -160,20 +240,19 @@ QString AerialBackend::previewPath(const AerialAsset &asset) const
 void AerialBackend::loadCatalog()
 {
     for (const auto &sourceId : {tvosSourceId, macosSourceId}) {
-        QFile sourceFile(sourceCatalogPath(sourceId));
-        if (sourceFile.open(QIODevice::ReadOnly)) {
-            m_sourceManifests.insert(sourceId, sourceFile.readAll());
+        const QByteArray sourceManifest = readCatalogFile(sourceCatalogPath(sourceId));
+        if (!sourceManifest.isEmpty()) {
+            m_sourceManifests.insert(sourceId, sourceManifest);
         }
     }
     if (!m_sourceManifests.isEmpty() && activateCatalog(combineManifests(m_sourceManifests), false)) {
         setState(QStringLiteral("ready"));
         return;
     }
-    QFile file(catalogPath());
-    if (!file.open(QIODevice::ReadOnly)) {
+    const QByteArray legacyManifest = readCatalogFile(catalogPath());
+    if (legacyManifest.isEmpty()) {
         return;
     }
-    const QByteArray legacyManifest = file.readAll();
     m_sourceManifests = splitLegacyManifest(legacyManifest);
     if (activateCatalog(m_sourceManifests.isEmpty() ? legacyManifest : combineManifests(m_sourceManifests), false)) {
         setState(QStringLiteral("ready"));
@@ -182,6 +261,10 @@ void AerialBackend::loadCatalog()
 
 bool AerialBackend::activateCatalog(const QByteArray &data, bool persist)
 {
+    if (data.size() > maximumManifestBytes) {
+        setError(QStringLiteral("The catalog manifest is too large"));
+        return false;
+    }
     QString error;
     auto assets = ManifestParser::parse(data, &error);
     if (assets.isEmpty()) {
@@ -215,15 +298,15 @@ void AerialBackend::refreshCatalog()
     m_catalogBuffer.clear();
     m_sourceManifests.clear();
     for (const auto &sourceId : {tvosSourceId, macosSourceId}) {
-        QFile sourceFile(sourceCatalogPath(sourceId));
-        if (sourceFile.open(QIODevice::ReadOnly)) {
-            m_sourceManifests.insert(sourceId, sourceFile.readAll());
+        const QByteArray sourceManifest = readCatalogFile(sourceCatalogPath(sourceId));
+        if (!sourceManifest.isEmpty()) {
+            m_sourceManifests.insert(sourceId, sourceManifest);
         }
     }
     if (m_sourceManifests.isEmpty()) {
-        QFile legacyFile(catalogPath());
-        if (legacyFile.open(QIODevice::ReadOnly)) {
-            m_sourceManifests = splitLegacyManifest(legacyFile.readAll());
+        const QByteArray legacyManifest = readCatalogFile(catalogPath());
+        if (!legacyManifest.isEmpty()) {
+            m_sourceManifests = splitLegacyManifest(legacyManifest);
         }
     }
     m_catalogErrors.clear();
@@ -276,10 +359,11 @@ void AerialBackend::startNextPreview()
 
         m_previewBuffer.clear();
         QNetworkRequest request(asset->previewUrl);
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
         request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("PlasmaAerial/0.1"));
         request.setTransferTimeout(15'000);
         m_previewReply = m_network.get(request);
+        configureReply(m_previewReply, maximumPreviewBytes, previewDeadlineMs);
 #ifdef AERIAL_ALLOW_INSECURE_TLS
         connect(m_previewReply, &QNetworkReply::sslErrors, this, [reply = QPointer<QNetworkReply>(m_previewReply)](const QList<QSslError> &) {
             if (reply) {
@@ -287,19 +371,32 @@ void AerialBackend::startNextPreview()
             }
         });
 #endif
-        connect(m_previewReply, &QNetworkReply::redirected, this, [this](const QUrl &redirect) {
-            if (m_previewReply && !isAllowedUrl(redirect)) {
-                m_previewReply->abort();
+        const QPointer<QNetworkReply> previewReply = m_previewReply;
+        connect(m_previewReply, &QNetworkReply::redirected, this, [this, previewReply](const QUrl &redirect) {
+            if (!previewReply) {
+                return;
+            }
+            if (isAllowedUrl(redirect)) {
+                previewReply->redirectAllowed();
+            } else {
+                previewReply->abort();
             }
         });
         connect(m_previewReply, &QIODevice::readyRead, this, [this] {
             if (!m_previewReply) {
                 return;
             }
-            m_previewBuffer.append(m_previewReply->readAll());
-            if (m_previewBuffer.size() > maximumPreviewBytes) {
+            const qint64 remaining = maximumPreviewBytes - m_previewBuffer.size();
+            if (remaining < 0) {
                 m_previewReply->abort();
+                return;
             }
+            const QByteArray chunk = readReplyChunk(m_previewReply, remaining);
+            if (chunk.size() > remaining) {
+                m_previewReply->abort();
+                return;
+            }
+            m_previewBuffer.append(chunk);
         });
         connect(m_previewReply, &QNetworkReply::finished, this, [this] {
             const auto reply = m_previewReply;
@@ -329,7 +426,7 @@ void AerialBackend::ensureDownloaded(const QString &assetId, const QString &qual
     if (assetId.isEmpty()) {
         return;
     }
-    if (m_reply) {
+    if (m_catalogProcessing || m_reply) {
         if (m_requestKind == RequestKind::Video && m_assetId == assetId) {
             return;
         }
@@ -383,11 +480,15 @@ void AerialBackend::startRequest(const QUrl &url, RequestKind kind)
         return;
     }
     QNetworkRequest request(url);
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
     request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("PlasmaAerial/0.1"));
     request.setTransferTimeout(30'000);
     m_requestKind = kind;
     m_reply = m_network.get(request);
+    const qint64 maximumResponseBytes = kind == RequestKind::Discovery
+        ? maximumDiscoveryBytes
+        : kind == RequestKind::Catalog ? maximumCatalogArchiveBytes : maximumVideoBytes;
+    configureReply(m_reply, maximumResponseBytes, requestDeadlineMs);
 #ifdef AERIAL_ALLOW_INSECURE_TLS
     connect(m_reply, &QNetworkReply::sslErrors, this, [reply = QPointer<QNetworkReply>(m_reply)](const QList<QSslError> &errors) {
         if (!reply) {
@@ -397,24 +498,42 @@ void AerialBackend::startRequest(const QUrl &url, RequestKind kind)
         reply->ignoreSslErrors();
     });
 #endif
-    connect(m_reply, &QNetworkReply::redirected, this, [this](const QUrl &redirect) {
-        if (!isAllowedUrl(redirect) && m_reply) {
-            m_reply->abort();
+    const QPointer<QNetworkReply> reply = m_reply;
+    connect(m_reply, &QNetworkReply::redirected, this, [this, reply](const QUrl &redirect) {
+        if (!reply) {
+            return;
+        }
+        if (isAllowedUrl(redirect)) {
+            reply->redirectAllowed();
+        } else {
+            reply->abort();
         }
     });
     connect(m_reply, &QIODevice::readyRead, this, [this] {
         if (!m_reply) {
             return;
         }
-        const QByteArray chunk = m_reply->readAll();
         if (m_requestKind == RequestKind::Catalog || m_requestKind == RequestKind::Discovery) {
-            m_catalogBuffer.append(chunk);
             const qint64 limit = m_requestKind == RequestKind::Discovery ? maximumDiscoveryBytes : maximumCatalogArchiveBytes;
-            if (m_catalogBuffer.size() > limit) {
+            const qint64 remaining = limit - m_catalogBuffer.size();
+            if (remaining < 0) {
                 m_reply->abort();
+                return;
             }
+            const QByteArray chunk = readReplyChunk(m_reply, remaining);
+            if (chunk.size() > remaining) {
+                m_reply->abort();
+                return;
+            }
+            m_catalogBuffer.append(chunk);
         } else if (m_downloadFile) {
-            if (m_downloadFile->size() + chunk.size() > maximumVideoBytes || m_downloadFile->write(chunk) != chunk.size()) {
+            const qint64 remaining = maximumVideoBytes - m_downloadFile->size();
+            if (remaining < 0) {
+                m_reply->abort();
+                return;
+            }
+            const QByteArray chunk = readReplyChunk(m_reply, remaining);
+            if (chunk.size() > remaining || (!chunk.isEmpty() && m_downloadFile->write(chunk) != chunk.size())) {
                 m_reply->abort();
             }
         }
@@ -633,7 +752,7 @@ void AerialBackend::enforceCacheLimit(qint64 limitBytes)
 
 void AerialBackend::startNextPendingDownload()
 {
-    if (m_reply || m_pendingDownloads.isEmpty()) {
+    if (m_reply || m_catalogProcessing || m_pendingDownloads.isEmpty()) {
         return;
     }
     const PendingDownload pending = m_pendingDownloads.takeFirst();
