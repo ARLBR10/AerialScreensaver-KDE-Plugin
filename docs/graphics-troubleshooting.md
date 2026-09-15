@@ -1,4 +1,38 @@
-# Freezes after a kernel or graphics driver update
+# Graphics troubleshooting
+
+## High CPU usage during playback
+
+Qt Multimedia automatically selects a hardware decoder when supported. Installed
+Vulkan or FFmpeg drivers do not override settings that explicitly disable it.
+Check the Plasma service configuration first:
+
+```sh
+systemctl --user show plasma-plasmashell.service -p Environment -p DropInPaths
+```
+
+If `QT_FFMPEG_DECODING_HW_DEVICE_TYPES=,` and
+`QT_DISABLE_HW_TEXTURES_CONVERSION=1` appear, the software-decoding workaround
+below is enabled. It forces CPU decoding and disables GPU texture conversion.
+This can be particularly expensive for 4K 10-bit HEVC videos. Remove the
+workaround using the instructions below, then log out and back in. Rebuilding
+the plugin or switching wallpapers does not clear the running shell's
+environment.
+
+After logging back in, re-enable Aerial and compare CPU usage with the same
+video and settings. Playback logs are available with:
+
+```sh
+journalctl --user -b -u plasma-plasmashell.service --no-pager -g 'HW decoder|Video:|qt.multimedia'
+```
+
+`No HW decoder found` indicates software decoding; removing the override allows
+automatic hardware selection but does not guarantee driver or codec support.
+For further diagnosis, Qt documents `QT_LOGGING_RULES="*.multimedia.*=true"`
+in its Advanced FFmpeg Configuration guide linked below. Apply it before
+starting Plasma and remove it after collecting logs. For lower playback cost,
+choose **1080p H.264 SDR** and **Crossfade: 0 ms** in Aerial's settings.
+
+## Freezes after a kernel or graphics driver update
 
 Aerial plays inside `plasmashell`. Hardware decoding and video texture import
 can exercise driver paths that a static wallpaper does not use. If the GPU
@@ -10,7 +44,7 @@ modeset failures. Some display errors also occurred before the user session.
 These establish a graphics-stack failure, but do not establish whether video
 decoding, rendering, or another driver operation triggered it.
 
-## Reduce the video driver's involvement
+### Reduce the video driver's involvement
 
 On a working session (use the known-working LTS kernel if necessary):
 

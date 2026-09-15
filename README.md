@@ -52,6 +52,9 @@ standalone package installed only with `kpackagetool6` is not sufficient.
 ## Runtime Notes
 
 - A working Qt Multimedia FFmpeg backend and H.264 decoder are required.
+- Hardware decoding is selected automatically by Qt when supported. For high
+  CPU usage, first check for a leftover software-decoding override; see
+  [graphics troubleshooting](docs/graphics-troubleshooting.md#high-cpu-usage-during-playback).
 - Crossfade can be disabled with **0 ms** to avoid overlapping video decoders.
   For freezes after a kernel/driver update, see the
   [software-decoding workaround](docs/graphics-troubleshooting.md).
